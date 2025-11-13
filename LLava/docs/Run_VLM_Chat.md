@@ -16,6 +16,9 @@
 CUDA_VISIBLE_DEVICES=7 python -m llava.serve.cli --model-path liuhaotian/llava-v1.5-7b --image-file "https://llava-vl.github.io/static/images/view.jpg" --load-4bit
 
 ’’’
+‘‘‘
+CUDA_VISIBLE_DEVICES=4 python VisionZip/visionzip_cli.py --model-path /datadisk2/quyanyi/cache/huggingface/hub/models--liuhaotian--llava-v1.5-7b/snapshots/4481d270cc22fd5c4d1bb5df129622006ccd9234 --image-file VisionZip/sample_dog.png --device cuda:0 --load-4bit
+’’’
 
 
 ```
