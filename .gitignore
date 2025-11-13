@@ -1,0 +1,13 @@
+# archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.rar
+*.7z
+*.jpg
+# generated outputs accidentally created by CLI
+--output/
+--pred-jsonl/
+/home/quyanyi/ToRe4VLM_Inf/LLava/Benchmark/VQAv2/Annotations/v2_mscoco_val2014_annotations.json
