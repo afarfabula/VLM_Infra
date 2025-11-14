@@ -22,48 +22,8 @@ from visionzip import visionzip
 
 # ======================= VisionZip CLI 注释 =======================
 # 本脚本展示如何在 LLaVA 模型上注入 VisionZip 的视觉 token 压缩补丁：
-# - 通过 visionzip(model, dominant, contextual) 将补丁挂载到 CLIP 视觉塔与 LLaVA 的多模态对接逻辑；
-# - dominant 表示显著视觉 token 数（含 CLS），contextual 表示上下文聚合 token 数；
-# - 生成阶段依旧使用 model.generate，只是图像侧会走 VisionZip 的压缩/还原流程以降低视觉 token 数。
-#
-# 启动示例（在仓库根目录运行）：
-# - 默认（建议加量化以降显存）：
-#   python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --load-4bit
-# - 指定物理 GPU（不设置 CUDA_VISIBLE_DEVICES 时）：
-#   python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --device cuda:2
-# - 指定 GPU4（只暴露一张卡，进程内索引从 0 开始）：
-#   CUDA_VISIBLE_DEVICES=4 PYTORCH_ALLOC_CONF=expandable_segments:True \
-#   python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --device cuda:0 --load-4bit --max-new-tokens 64
-# - 远程图片 URL：
-#   python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file https://images.cocodataset.org/val2017/000000039769.jpg --load-4bit
-# - CPU 运行（很慢，不推荐）：
-#   python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --device cpu
-# 说明与建议：
-# - 使用 CUDA_VISIBLE_DEVICES 只暴露某张卡时，请在本脚本内用 --device cuda:0；不设置该环境变量时可直接用物理索引 --device cuda:<gpu_id>。
-# - --dominant 与 --contextual 控制 VisionZip 压缩强度（默认 54/10），可按需调整：如 --dominant 32 --contextual 8。
-# - 如果显存紧张，建议 --load-4bit，并适当降低 --max-new-tokens；可加 PYTORCH_ALLOC_CONF=expandable_segments:True 降低碎片化。
-# - 使用本地权重路径（避免远程下载）：
-#   python VisionZip/visionzip_cli.py --model-path /home_ext/quyanyi/Models/liuhaotian--llava-v1.6-7b-hf/snapshots/<commit_id> \
-#     --image-file VisionZip/sample_dog.png --load-4bit
-#   或者（v1.5-7B 本地快照示例）：
-#   python VisionZip/visionzip_cli.py --model-path /home_ext/quyanyi/Models/liuhaotian--llava-v1.5-7b/snapshots/<commit_id> \
-#     --image-file VisionZip/sample_dog.png --load-4bit
-#   说明：HuggingFace 本地缓存通常位于 ~/.cache/huggingface/hub/models--<org>--<repo>/snapshots/<commit_id>；
-#   请选择具体的 snapshots/<commit_id> 目录作为 --model-path（该目录需包含 tokenizer_config.json、config.json、model.safetensors 等）。
-#
-# 启动示例（在仓库根目录运行）：
-# 1) 使用 LLaVA v1.6-7B（默认 GPU）：
-#    python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --dominant 54 --contextual 10
-# 2) 指定 GPU：
-#    CUDA_VISIBLE_DEVICES=0 python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file /path/to/your_image.jpg
-# 3) 低显存 4bit 量化：
-#    python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --load-4bit
-# 4) CPU 运行（很慢，不推荐）：
-#    python VisionZip/visionzip_cli.py --model-path liuhaotian/llava-v1.6-7b-hf --image-file VisionZip/sample_dog.png --device cpu
-# 说明：
-# - --model-path 可以是 HuggingFace 的模型名（如 liuhaotian/llava-v1.6-7b-hf），也可以是本地快照路径。
-# - --dominant 与 --contextual 控制 VisionZip 的压缩强度，默认分别为 54 与 10。
-# - 如果遇到推理显存压力，可加 --load-4bit 或 --load-8bit。
+# conda activate LLava && cd /data/model/Inference_VLM/VLM_Infra/VisionZip
+# HF_HOME=/data/model/Inference_VLM/.cache HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache python visionzip_cli.py --model-path /data/model/Inference_VLM/models-LLava-1.5-7B --image-file /data/model/Inference_VLM/sample_dog.png --load-4bit --max-new-tokens 512
 
 def safe_input(prompt: str) -> str:
     try:
