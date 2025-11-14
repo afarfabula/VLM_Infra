@@ -7,6 +7,10 @@
 *.rar
 *.7z
 *.jpg
+*.MP4
+*.mp4
+*.json
+*.jsonl
 # generated outputs accidentally created by CLI
 --output/
 --pred-jsonl/
