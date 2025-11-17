@@ -25,6 +25,8 @@ from visionzip import visionzip
 # conda activate LLava && cd /data/model/Inference_VLM/VLM_Infra/VisionZip
 # HF_HOME=/data/model/Inference_VLM/.cache HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache python visionzip_cli.py --model-path /data/model/Inference_VLM/models-LLava-1.5-7B --image-file /data/model/Inference_VLM/sample_dog.png --load-4bit --max-new-tokens 512
 
+# HF_HOME=/data/model/Inference_VLM/.cache HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache python visionzip_cli.py --model-path /data/model/Inference_VLM/models-LLava-1.5-13B --image-file /data/model/Inference_VLM/sample_dog.png --load-8bit --max-new-tokens 512
+
 def safe_input(prompt: str) -> str:
     try:
         # If stdin is a TTY, normal interactive input
