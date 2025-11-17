@@ -11,9 +11,9 @@ export TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache
 # 默认参数
 MODEL_NAME="${1:-LLaVA-1.5-7B}"
 USE_VISIONZIP="${2:-true}"  # 默认使用VisionZip
-GPU_ID="${3:-1}"  # 默认使用GPU 0
+GPU_ID="${3:-1}"  # 默认使用GPU 1
 LOAD_PRECISION="${4:-fp16}"  # 默认使用fp16精度
-NUM_SAMPLES="${5:-100}"  # 默认推理样本数
+NUM_SAMPLES="${5:-200}"  # 默认推理样本数
 BATCH_SIZE="${6:-32}"  # 默认批次大小
 DOMINANT_COUNT="${7:-54}"  # 默认dominant token数
 CONTEXTUAL_COUNT="${8:-10}"  # 默认contextual token数
