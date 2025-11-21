@@ -1,3 +1,20 @@
+import os
+# 设置环境变量来禁用自动加载适配器
+os.environ['TRANSFORMERS_NO_ADAPTERS'] = '1'
+
+# 在导入transformers之前进行monkey patching
+# 先导入必要的模块
+import types
+
+# 导入transformers
+import transformers
+# 重写load_adapter方法，让它什么都不做
+def no_op_load_adapter(self, *args, **kwargs):
+    pass
+
+# 应用monkey patch
+transformers.modeling_utils.PreTrainedModel.load_adapter = no_op_load_adapter
+
 import argparse
 import torch
 import sys
@@ -23,8 +40,7 @@ from visionzip import visionzip
 # ======================= VisionZip CLI 注释 =======================
 # 本脚本展示如何在 LLaVA 模型上注入 VisionZip 的视觉 token 压缩补丁：
 # conda activate LLava && cd /data/model/Inference_VLM/VLM_Infra/VisionZip
-# HF_HOME=/data/model/Inference_VLM/.cache HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache python visionzip_cli.py --model-path /data/model/Inference_VLM/models-LLava-1.5-7B --image-file /data/model/Inference_VLM/sample_dog.png --load-4bit --max-new-tokens 512
-
+# HF_HOME=/data/model/Inference_VLM/.cache HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache python /data/model/Inference_VLM/VLM_Infra/VisionZip/visionzip_cli.py --model-path /data/model/Inference_VLM/models-LLava-1.5-7B --image-file /data/model/Inference_VLM/VLM_Infra/VisionZip/sample_dog.png --max-new-tokens 512 --device cuda
 # HF_HOME=/data/model/Inference_VLM/.cache HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache TRANSFORMERS_CACHE=/data/model/Inference_VLM/.cache python visionzip_cli.py --model-path /data/model/Inference_VLM/models-LLava-1.5-13B --image-file /data/model/Inference_VLM/sample_dog.png --load-8bit --max-new-tokens 512
 
 def safe_input(prompt: str) -> str:
@@ -68,9 +84,44 @@ def main(args):
             model_name = 'llava-v1.5-7b'
         elif 'llava' in args.model_path.lower():
             model_name = 'llava'
+    # 确保使用CUDA设备
+    if args.device == "cuda" and torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+        print("警告: 使用CPU可能会很慢，且某些操作可能不支持Half精度")
+        # 在CPU上禁用量化
+        if args.load_8bit or args.load_4bit or args.load_fp16:
+            print("警告: CPU模式下不支持量化，将使用fp32")
+            args.load_8bit = False
+            args.load_4bit = False
+            args.load_fp16 = False
+    
+    # 根据是否使用量化设置device_map
+    if args.load_4bit or args.load_8bit:
+        # 量化模型需要使用auto设备映射
+        device_map = "auto"
+        print(f"使用{4 if args.load_4bit else 8}bit量化，device_map=auto")
+    else:
+        device_map = None
+    
+    # 加载预训练模型
     tokenizer, model, image_processor, context_len = load_pretrained_model(
-        args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=args.device
+        args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=device,
+        device_map=device_map
     )
+    
+    # 对于非量化模型，确保在正确的设备和精度上
+    if not args.load_8bit and not args.load_4bit:
+        model = model.to(device)
+        if device == "cpu":
+            # 在CPU上使用float32
+            model = model.float()
+            print("已将模型转换为float32精度 (CPU模式)")
+        elif args.load_fp16:
+            # 启用FP16精度模式
+            print("已启用FP16精度模式")
+        print(f"模型已加载至 {device} 设备")
 
 
     # Inject VisionZip
@@ -201,6 +252,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
+    parser.add_argument("--load-fp16", action="store_true", help="使用FP16精度运行")
     parser.add_argument("--dominant", type=int, default=54, help="VisionZip dominant tokens")
     parser.add_argument("--contextual", type=int, default=10, help="VisionZip contextual tokens")
     parser.add_argument("--debug", action="store_true")

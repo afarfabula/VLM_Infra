@@ -3,6 +3,11 @@
 # VQAv2单进程推理启动脚本
 # 用于测试和调试
 
+# 使用source来激活conda环境，避免'conda init'错误
+CONDA_BASE=$(conda info --base)
+source "$CONDA_BASE/etc/profile.d/conda.sh"
+conda activate llava
+
 # 设置环境变量
 export HF_HOME=/data/model/Inference_VLM/.cache
 export HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache

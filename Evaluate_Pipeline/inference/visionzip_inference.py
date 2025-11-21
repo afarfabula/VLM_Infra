@@ -4,7 +4,15 @@ VisionZip优化的模型推理模块
 支持分布式推理
 """
 
+# 关键：设置环境变量来禁用自动加载适配器，避免inject_adapter_in_model错误
 import os
+os.environ['TRANSFORMERS_NO_ADAPTERS'] = '1'
+
+# 确保使用正确的缓存目录
+os.environ['HF_HOME'] = '/data/model/Inference_VLM/.cache'
+os.environ['HUGGINGFACE_HUB_CACHE'] = '/data/model/Inference_VLM/.cache'
+os.environ['TRANSFORMERS_CACHE'] = '/data/model/Inference_VLM/.cache'
+
 import sys
 import torch
 import time
@@ -12,20 +20,40 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from PIL import Image
 
-# 导入LLaVA相关模块
+# 在导入transformers之前进行monkey patching，这是关键的修复
+import types
+
+# 先导入transformers
+import transformers
+print(f"Transformers模块导入成功，版本: {transformers.__version__}")
+
+# 重写load_adapter方法，让它什么都不做，避免inject_adapter_in_model错误
+def no_op_load_adapter(self, *args, **kwargs):
+    pass
+
+# 应用monkey patch
+transformers.modeling_utils.PreTrainedModel.load_adapter = no_op_load_adapter
+
+# 导入transformers组件
+from transformers import StoppingCriteriaList, TextIteratorStreamer
+from threading import Thread
+
+# 设置LLaVA路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "LLava"))
 
+# 直接导入LLaVA相关模块，与visionzip_cli.py保持一致
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
 from llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
-from transformers import StoppingCriteriaList, TextIteratorStreamer
-from threading import Thread
 
-# 导入VisionZip
+# 设置VisionZip路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "VisionZip"))
+
+# 直接导入VisionZip，与visionzip_cli.py保持一致
 from visionzip import visionzip
+print("VisionZip模块导入成功")
 
 
 class VisionZipInference:
@@ -84,18 +112,31 @@ class VisionZipInference:
         
         print(f"进程 {self.rank} 使用{self.load_precision}精度加载模型...")
         
+        # 对于本地已下载的完整LLaVA模型，直接使用None作为model_base
+        model_base = None
+        
         # 加载预训练模型
         self.tokenizer, self.model, self.image_processor, context_len = load_pretrained_model(
             self.model_path, 
-            None,  # model_base
+            model_base,
             model_name, 
             load_8bit, 
             load_4bit, 
             device=self.device
         )
         
+        # 在VisionZip注入前进行PEFT相关检查，避免inject_adapter_in_model错误
+        # 检查并处理模型的PEFT相关属性
+        if hasattr(self.model, 'base_model'):
+            if hasattr(self.model.base_model, 'peft_config'):
+                if self.model.base_model.peft_config is None:
+                    print(f"进程 {self.rank} 移除了None的peft_config以避免注入错误")
+                    delattr(self.model.base_model, 'peft_config')
+        
         # 注入VisionZip补丁
+        print(f"进程 {self.rank} 开始注入VisionZip补丁...")
         self.model = visionzip(self.model, dominant=self.dominant, contextual=self.contextual)
+        print(f"进程 {self.rank} VisionZip补丁注入完成")
         
         # 设置对话模板
         if "llama-2" in model_name.lower():

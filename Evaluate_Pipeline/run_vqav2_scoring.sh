@@ -3,6 +3,16 @@
 # 简化版VQAv2推理和评分一体化脚本
 # 使用集成的Python管道，所有流程都在main函数中
 
+# 激活conda环境
+if command -v conda &> /dev/null; then
+    # 使用source避免'conda init'错误
+    source $(conda info --base)/etc/profile.d/conda.sh
+    conda activate llava
+    echo "已激活conda环境: llava"
+else
+    echo "警告: 未找到conda命令，可能无法正确加载依赖"
+fi
+
 # 设置环境变量
 export HF_HOME=/data/model/Inference_VLM/.cache
 export HUGGINGFACE_HUB_CACHE=/data/model/Inference_VLM/.cache

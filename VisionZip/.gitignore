@@ -10,3 +10,5 @@ env/
 *.egg-info/
 dist/
 build/
+vision_tower/*.bin
+vision_tower/*.h5
