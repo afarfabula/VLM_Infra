@@ -19,5 +19,8 @@ python /data/model/Inference_VLM/VLM_Infra/VisionZip/visionzip_cli.py \
     --model-path /data/model/Inference_VLM/models-LLava-1.5-7B \
     --image-file /data/model/Inference_VLM/VLM_Infra/VisionZip/sample_dog.png \
     --load-fp16 \
-    --max-new-tokens 100 \
+    --max-new-tokens 1024 \
+    --dominant 54 \
+    --contextual 10 \
+    --use-flash-attn \
     --device cuda

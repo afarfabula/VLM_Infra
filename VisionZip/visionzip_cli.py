@@ -19,6 +19,7 @@ import argparse
 import torch
 import sys
 import time
+import warnings
 from threading import Thread
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
@@ -74,6 +75,21 @@ def load_image(image_file):
 def main(args):
     # Model
     disable_torch_init()
+    
+    # 初始化use_flash_attn变量，默认为命令行参数值
+    use_flash_attn = args.use_flash_attn
+    
+    if args.use_flash_attn:
+        try:
+            # 检查flash_attn包是否已安装
+            import flash_attn
+            print("✅ flash-attn包已成功安装")
+            # 不再尝试直接设置transformers.utils.accelerate，而是通过load_pretrained_model的参数来启用
+            print("✅ 将通过load_pretrained_model的参数启用Flash Attention 2")
+        except ImportError as e:
+            warnings.warn(f"⚠️  flash-attn包未安装: {e}")
+            warnings.warn("⚠️  将禁用Flash Attention以避免加载错误")
+            use_flash_attn = False
 
     model_name = get_model_name_from_path(args.model_path)
     # If using local HF snapshot path, ensure model_name contains 'llava'
@@ -108,7 +124,7 @@ def main(args):
     # 加载预训练模型
     tokenizer, model, image_processor, context_len = load_pretrained_model(
         args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, device=device,
-        device_map=device_map
+        device_map=device_map, use_flash_attn=use_flash_attn
     )
     
     # 对于非量化模型，确保在正确的设备和精度上
@@ -253,6 +269,7 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--load-fp16", action="store_true", help="使用FP16精度运行")
+    parser.add_argument("--use-flash-attn", action="store_true", help="使用Flash Attention 2加速推理")
     parser.add_argument("--dominant", type=int, default=54, help="VisionZip dominant tokens")
     parser.add_argument("--contextual", type=int, default=10, help="VisionZip contextual tokens")
     parser.add_argument("--debug", action="store_true")

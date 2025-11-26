@@ -59,11 +59,12 @@ print("VisionZip模块导入成功")
 class VisionZipInference:
     """VisionZip优化的模型推理器"""
     
-    def __init__(self, model_path: str, device: Optional[str] = None, load_precision: str = '4bit', dominant: int = 54, contextual: int = 10):
+    def __init__(self, model_path: str, device: Optional[str] = None, load_precision: str = '4bit', dominant: int = 54, contextual: int = 10, use_flash_attn: bool = True):
         self.model_path = model_path
         self.load_precision = load_precision
         self.dominant = dominant
         self.contextual = contextual
+        self.use_flash_attn = use_flash_attn
         
         # 分布式配置
         self.rank = int(os.environ.get('RANK', 0))
@@ -122,7 +123,8 @@ class VisionZipInference:
             model_name, 
             load_8bit, 
             load_4bit, 
-            device=self.device
+            device=self.device,
+            use_flash_attn=self.use_flash_attn
         )
         
         # 在VisionZip注入前进行PEFT相关检查，避免inject_adapter_in_model错误

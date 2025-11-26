@@ -43,7 +43,7 @@ class EvaluatePipeline:
         with open(config_path, 'r') as f:
             return json.load(f)
     
-    def run_vqav2_evaluation(self, model_name='LLaVA-1.5-7B', visionzip_enabled=False, result_dir='./results', num_samples=100, batch_size=32, load_precision='4bit', dominant=54, contextual=10):
+    def run_vqav2_evaluation(self, model_name='LLaVA-1.5-7B', visionzip_enabled=False, result_dir='./results', num_samples=100, batch_size=32, load_precision='4bit', dominant=54, contextual=10, use_flash_attn=False):
         """运行VQAv2评估"""
         self.start_time = time.time()
         
@@ -74,7 +74,8 @@ class EvaluatePipeline:
                     device=f"cuda:{self.local_rank}",
                     load_precision=load_precision,
                     dominant=dominant,
-                    contextual=contextual
+                    contextual=contextual,
+                    use_flash_attn=use_flash_attn
                 )
             else:
                 # 使用标准推理器（需要实现）
@@ -82,7 +83,8 @@ class EvaluatePipeline:
                 self.inference_engine = VisionZipInference(
                     model_path=model_path,
                     device=f"cuda:{self.local_rank}",
-                    load_precision=load_precision
+                    load_precision=load_precision,
+                    use_flash_attn=use_flash_attn
                 )
             
             # 3. 初始化评估器
@@ -237,6 +239,8 @@ def main():
                        help='批次大小 (默认: 32)')
     parser.add_argument('--load_precision', type=str, default='4bit',
                        help='模型加载精度 (默认: 4bit)')
+    parser.add_argument('--use-flash-attn', action='store_true',
+                       help='使用Flash Attention 2加速推理')
     
     args = parser.parse_args()
     
@@ -256,7 +260,8 @@ def main():
             result_dir=args.output,
             num_samples=args.num_samples,
             batch_size=args.batch_size,
-            load_precision=args.load_precision
+            load_precision=args.load_precision,
+        use_flash_attn=args.use_flash_attn
         )
         print_rank0("评估管道执行成功")
         

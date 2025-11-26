@@ -22,7 +22,8 @@ MODEL_NAME="${1:-LLaVA-1.5-7B}"
 USE_VISIONZIP="${2:---visionzip}"  # 默认使用VisionZip
 GPU_ID="${3:-1}"  # 默认使用GPU 1
 #LOAD_PRECISION="${4:-8bit}"  # 默认使用8bit量化加载
-LOAD_PRECISION="${4:-fp16}" 
+LOAD_PRECISION="${4:-fp16}"
+USE_FLASH_ATTN="${5:---use-flash-attn}"  # 默认启用Flash Attention 
 
 # 单进程推理
 echo "启动VQAv2单进程评估..."
@@ -38,10 +39,12 @@ echo "=== 启动单进程推理 ==="
 echo "样本数量: 100, Batch Size: 32"
 echo "使用GPU: $GPU_ID"
 echo "模型加载精度: $LOAD_PRECISION"
+echo "Flash Attention: ${USE_FLASH_ATTN:+启用}${USE_FLASH_ATTN:---no-flash-attn}"
 CUDA_VISIBLE_DEVICES=$GPU_ID python main.py \
     --config "configs/vqav2_config.json" \
     --model "$MODEL_NAME" \
     $USE_VISIONZIP \
+    $USE_FLASH_ATTN \
     --output "./single_outputs" \
     --num_samples 100 \
     --batch_size 32 \
