@@ -115,6 +115,7 @@ class EvaluatePipeline:
             for batch in self.data_loader:
                 # 提取问题和图像
                 questions = [item['question'] for item in batch]
+                
                 images = [self.data_loader.dataset.load_image(item['image_path']) for item in batch]
                 question_ids = [item['question_id'] for item in batch]
                 image_ids = [item['image_id'] for item in batch]
@@ -217,6 +218,305 @@ class EvaluatePipeline:
             # 清理分布式环境
             cleanup_distributed()
     
+    def run_dataset_evaluation(self, dataset_name='vqav2', model_name='LLaVA-1.5-7B', visionzip_enabled=False, result_dir='./results', num_samples=100, batch_size=32, load_precision='4bit', dominant=54, contextual=10, use_flash_attn=False, use_shared_model=False, num_workers=4):
+        """运行通用数据集评估
+        
+        Args:
+            dataset_name: 数据集名称，当前支持'vqav2'和'scienceqa'
+            model_name: 模型名称
+            visionzip_enabled: 是否启用VisionZip优化
+            result_dir: 结果保存目录
+            num_samples: 样本数量
+            batch_size: 批次大小
+            load_precision: 模型加载精度
+            dominant: VisionZip dominant参数
+            contextual: VisionZip contextual参数
+            use_flash_attn: 是否使用Flash Attention
+            use_shared_model: 是否使用共享模型优化
+            num_workers: 工作线程数
+            
+        Returns:
+            int: 处理的总样本数
+        """
+        self.start_time = time.time()
+        
+        print_rank0(f"开始{dataset_name}评估 - 样本数: {num_samples}, 批次大小: {batch_size}")
+        
+        try:
+            # 1. 准备数据加载器
+            print_rank0("准备数据加载器...")
+            if dataset_name == 'vqav2':
+                from data_loader.vqav2_loader import create_vqav2_dataloader
+                self.data_loader = create_vqav2_dataloader(
+                    data_root="/data/model/Inference_VLM/VLM_Infra/datasets/VQAv2",
+                    batch_size=batch_size,
+                    num_workers=4,
+                    num_samples=num_samples
+                )
+            elif dataset_name == 'scienceqa':
+                from data_loader.scienceqa_loader import create_scienceqa_dataloader
+                self.data_loader = create_scienceqa_dataloader(
+                    data_root="/data/model/Inference_VLM/VLM_Infra/datasets/ScienceQA/ScienceQA",
+                    batch_size=batch_size,
+                    num_workers=4,
+                    num_samples=num_samples
+                )
+            else:
+                raise ValueError(f"不支持的数据集: {dataset_name}")
+            
+            # 2. 初始化推理引擎
+            print_rank0("初始化推理引擎...")
+            
+            if use_shared_model:
+                # 使用共享模型优化推理
+                from optimized_inference.shared_model_inference import create_shared_model_inference
+                print_rank0("使用共享模型优化推理")
+                self.inference_engine = create_shared_model_inference(
+                    model_path=self.config['model_configs'][model_name]['model_path'],
+                    num_workers=num_workers,
+                    batch_size=batch_size,
+                    use_visionzip=visionzip_enabled
+                )
+            else:
+                # 获取模型路径
+                model_path = self.config['model_configs'][model_name]['model_path']
+                
+                # 根据是否启用VisionZip选择不同的推理器
+                if visionzip_enabled:
+                    # 使用VisionZip推理器
+                    from inference.visionzip_inference import VisionZipInference
+                    self.inference_engine = VisionZipInference(
+                        model_path=model_path,
+                        device=f"cuda:{self.local_rank}",
+                        load_precision=load_precision,
+                        dominant=dominant,
+                        contextual=contextual,
+                        use_flash_attn=use_flash_attn
+                    )
+                else:
+                    # 使用标准推理器
+                    from inference.visionzip_inference import VisionZipInference
+                    self.inference_engine = VisionZipInference(
+                        model_path=model_path,
+                        device=f"cuda:{self.local_rank}",
+                        load_precision=load_precision,
+                        use_flash_attn=use_flash_attn
+                    )
+            
+            # 3. 初始化评估器
+            print_rank0("初始化评估器...")
+            if dataset_name == 'vqav2':
+                from evaluation.vqav2_evaluator import create_vqav2_evaluator
+                self.evaluator = create_vqav2_evaluator(
+                    result_dir=result_dir
+                )
+            elif dataset_name == 'scienceqa':
+                from evaluation.scienceqa_evaluator import create_scienceqa_evaluator
+                self.evaluator = create_scienceqa_evaluator(
+                    result_dir=result_dir
+                )
+            
+            # 4. 运行推理
+            print_rank0("开始批量推理...")
+            total_samples = 0
+            batch_count = 0
+            
+            # 存储所有推理结果
+            all_results = []
+            
+            for batch in self.data_loader:
+                # 根据数据集类型提取问题和图像
+                if dataset_name == 'vqav2':
+                    
+                    questions = [item['question'] for item in batch]
+                    print(questions)
+                    images = [self.data_loader.dataset.load_image(item['image_path']) for item in batch]
+                    question_ids = [item['question_id'] for item in batch]
+                    image_ids = [item['image_id'] for item in batch]
+                elif dataset_name == 'scienceqa':
+                    # ScienceQA可能需要特殊处理
+                    print(f"DEBUG: 处理ScienceQA批次，批次大小: {len(batch)}")
+                    # batch是字典，键是字段名，值是列表
+                    questions = batch['question']
+                    print(f"DEBUG: 提取问题完成，问题数量: {len(questions)}")
+                    
+                    images = []
+                    # 检查是否有图像
+                    for i in range(len(questions)):
+                        print(f"DEBUG: 处理批次项 {i}")
+                        if 'image_path' in batch and batch['image_path'][i]:
+                            print(f"DEBUG: 项目 {i} 包含图像路径: {batch['image_path'][i]}")
+                            # 通过Subset对象的dataset属性访问原始ScienceQADataLoader对象
+                            if hasattr(self.data_loader.dataset, 'dataset'):
+                                # 如果是Subset对象，则访问其dataset属性
+                                image = self.data_loader.dataset.dataset.load_image(batch['image_path'][i])
+                            else:
+                                # 直接访问dataset对象
+                                image = self.data_loader.dataset.load_image(batch['image_path'][i])
+                            images.append(image)
+                            print(f"DEBUG: 图像加载 {'成功' if image is not None else '失败'}")
+                        else:
+                            print(f"DEBUG: 项目 {i} 不包含图像或图像路径为空")
+                            images.append(None)
+                    print('图像处理完成')
+                    question_ids = batch['question_id']
+                    image_ids = batch['image_path']
+                    print(f"DEBUG: 提取question_ids完成: {len(question_ids)}, image_ids完成: {len(image_ids)}")
+                
+                print(f"进程 {self.rank} 处理批次 {batch_count + 1}, 样本数: {len(questions)}")
+                
+                # 批量推理（过滤掉没有图像的样本）
+                valid_indices = []
+                valid_questions = []
+                valid_images = []
+                
+                for i, (q, img) in enumerate(zip(questions, images)):
+                    if dataset_name == 'vqav2' or (dataset_name == 'scienceqa' and img is not None):
+                        valid_indices.append(i)
+                        valid_questions.append(q)
+                        valid_images.append(img)
+                    elif dataset_name == 'scienceqa':
+                        # 对于没有图像的ScienceQA样本，也进行处理
+                        valid_indices.append(i)
+                        valid_questions.append(q)
+                        valid_images.append(None)
+                
+                predictions = []
+                if valid_questions:
+                    # 批量推理
+                    predictions = self.inference_engine.batch_generate(valid_questions, valid_images)
+                
+                # 保存批次结果
+                batch_results = []
+                pred_idx = 0
+                # 对于ScienceQA，我们需要重新构造batch_item
+                for i in valid_indices:
+                    if pred_idx < len(predictions):
+                        prediction = predictions[pred_idx]
+                        pred_idx += 1
+                        
+                        if dataset_name == 'vqav2':
+                            q_id = question_ids[i]
+                            img_id = image_ids[i]
+                            question = questions[i]
+                        elif dataset_name == 'scienceqa':
+                            q_id = question_ids[i]
+                            img_id = image_ids[i] if image_ids[i] else ''
+                            question = questions[i]
+                        
+                        # 从批次中获取ground truth（如果存在）
+                        ground_truth = ''
+                        if dataset_name == 'scienceqa':
+                            # 对于ScienceQA，答案在answer字段中
+                            ground_truth = batch['answer'][i] if 'answer' in batch else ''
+                        
+                        result = {
+                            'question_id': q_id,
+                            'image_id': img_id,
+                            'question': question,
+                            'model_prediction': prediction,
+                            'ground_truth': ground_truth,
+                            'batch_index': batch_count,
+                            'sample_index_in_batch': i,
+                            'dataset_name': dataset_name
+                        }
+                        
+                        # 添加图像路径（如果有）
+                        if dataset_name == 'scienceqa' and 'image_path' in batch:
+                            result['image_path'] = str(batch['image_path'][i]) if batch['image_path'][i] else ''
+                        
+                        batch_results.append(result)
+                
+                all_results.extend(batch_results)
+                total_samples += len(batch_results)
+                batch_count += 1
+                
+                # 进度显示
+                remaining_samples = len(self.data_loader.dataset) - total_samples
+                print(f"进程 {self.rank} 进度: 已推理 {total_samples}/{len(self.data_loader.dataset)} 样本, 剩余 {remaining_samples} 样本")
+                
+            # 5. 保存推理结果
+            self.end_time = time.time()
+            elapsed_time = self.end_time - self.start_time
+            
+            # 保存当前进程的推理结果
+            result_file = Path(result_dir) / f"rank_{self.rank}_{dataset_name}_inference_results.json"
+            with open(result_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'inference_results': all_results,
+                    'statistics': {
+                        'total_samples': total_samples,
+                        'batch_count': batch_count,
+                        'elapsed_time': elapsed_time,
+                        'samples_per_second': total_samples / elapsed_time if elapsed_time > 0 else 0,
+                        'rank': self.rank,
+                        'world_size': self.world_size,
+                        'dataset_name': dataset_name
+                    }
+                }, f, indent=2, ensure_ascii=False)
+            
+            print(f"进程 {self.rank} 推理完成 - 总样本: {total_samples}, 耗时: {elapsed_time:.2f}秒")
+            print(f"推理结果已保存: {result_file}")
+            
+            # 6. 如果是主进程，合并所有结果
+            if self.rank == 0:
+                # 等待所有进程完成
+                if self.world_size > 1:
+                    print_rank0("等待所有进程完成推理...")
+                    # 这里可以添加分布式同步逻辑
+                
+                # 合并所有进程的结果
+                merged_results = []
+                for rank in range(self.world_size):
+                    rank_file = Path(result_dir) / f"rank_{rank}_{dataset_name}_inference_results.json"
+                    if rank_file.exists():
+                        with open(rank_file, 'r', encoding='utf-8') as f:
+                            rank_data = json.load(f)
+                            merged_results.extend(rank_data['inference_results'])
+                
+                # 按question_id排序
+                merged_results.sort(key=lambda x: x['question_id'])
+                
+                # 保存合并结果
+                merged_file = Path(result_dir) / f"merged_{dataset_name}_inference_results.json"
+                with open(merged_file, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'inference_results': merged_results,
+                        'total_samples': len(merged_results),
+                        'world_size': self.world_size,
+                        'elapsed_time': elapsed_time,
+                        'dataset_name': dataset_name
+                    }, f, indent=2, ensure_ascii=False)
+                
+                print_rank0(f"合并推理结果已保存: {merged_file}")
+                print_rank0(f"总样本数: {len(merged_results)}, 总耗时: {elapsed_time:.2f}秒")
+                
+                # 7. 运行评估
+                if self.evaluator:
+                    print_rank0("开始评估...")
+                    if dataset_name == 'vqav2':
+                        metrics = self.evaluator.evaluate(merged_results)
+                    elif dataset_name == 'scienceqa':
+                        metrics = self.evaluator.evaluate(merged_results)
+                    
+                    # 保存评估结果
+                    eval_file = Path(result_dir) / f"{dataset_name}_evaluation_metrics.json"
+                    with open(eval_file, 'w', encoding='utf-8') as f:
+                        json.dump(metrics, f, indent=2, ensure_ascii=False)
+                    
+                    print_rank0(f"评估完成，指标已保存: {eval_file}")
+                    print_rank0(f"评估指标: {metrics}")
+            
+            return total_samples
+            
+        except Exception as e:
+            print(f"进程 {self.rank} 评估失败: {e}")
+            raise
+        
+        finally:
+            # 清理分布式环境
+            cleanup_distributed()
+    
     def get_performance_stats(self) -> dict:
         """获取性能统计"""
         if not self.start_time or not self.end_time:
@@ -235,9 +535,11 @@ class EvaluatePipeline:
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description='VQAv2评估管道')
+    parser = argparse.ArgumentParser(description='通用数据集评估管道')
     parser.add_argument('--config', type=str, required=True, 
                        help='配置文件路径')
+    parser.add_argument('--dataset', type=str, default='vqav2',
+                       help='数据集名称 (默认: vqav2, 可选: vqav2, scienceqa)')
     parser.add_argument('--model', type=str, default='LLaVA-1.5-7B',
                        help='模型名称')
     parser.add_argument('--visionzip', action='store_true',
@@ -269,7 +571,8 @@ def main():
     
     # 运行评估
     try:
-        pipeline.run_vqav2_evaluation(
+        pipeline.run_dataset_evaluation(
+            dataset_name=args.dataset,
             model_name=args.model,
             visionzip_enabled=args.visionzip,
             result_dir=args.output,
