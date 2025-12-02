@@ -160,20 +160,25 @@ class ScienceQAEvaluator:
             return ''
         
         # 转换为字符串并去除空格
-        option_str = str(option_str).strip().upper()
+        option_str = str(option_str).strip()
         
-        # 尝试直接映射
-        if option_str in option_map:
-            return option_map[option_str]
+        # 特殊处理 "The answer is X" 格式
+        import re
+        match = re.search(r'[Tt]he\s+answer\s+is\s+([A-Za-z])', option_str)
+        if match:
+            letter = match.group(1).upper()
+            if letter in ['A', 'B', 'C', 'D', 'E', 'F']:
+                return letter
         
-        # 尝试从字符串中提取选项
-        for char in option_str:
-            if char in option_map:
-                return option_map[char]
+        # 单独的字母选项
+        if len(option_str) == 1 and option_str.upper() in ['A', 'B', 'C', 'D', 'E', 'F']:
+            return option_str.upper()
         
-        # 如果是数字，直接映射
+        # 数字索引 (0->A, 1->B, 2->C, 3->D, 4->E)
         if option_str.isdigit():
-            return option_map.get(option_str, '')
+            idx = int(option_str)
+            if idx in [0, 1, 2, 3, 4]:
+                return ['A', 'B', 'C', 'D', 'E'][idx]
         
         return option_str  # 返回原始字符串作为回退
     
@@ -188,30 +193,39 @@ class ScienceQAEvaluator:
             bool: 是否正确
         """
         try:
-            # 转换为字符串进行比较
-            pred_str = str(prediction).strip().upper()
-            gt_str = str(ground_truth).strip().upper()
+            # 转换为字符串
+            pred_str = str(prediction).strip()
+            gt_str = str(ground_truth).strip()
             
             print(f"检查正确性 - 预测: '{pred_str}', 答案: '{gt_str}'")
             
-            # 直接字符串匹配
-            if pred_str == gt_str:
-                return True
+            # 处理字母选项 (A=0, B=1, C=2, D=3, E=4)
+            def extract_option(s):
+                # 匹配 "The answer is X" 格式
+                import re
+                match = re.search(r'[Tt]he\s+answer\s+is\s+([A-Za-z])', s)
+                if match:
+                    return match.group(1).upper()
+                
+                # 单独的字母
+                if len(s) == 1 and s.upper() in ['A', 'B', 'C', 'D', 'E']:
+                    return s.upper()
+                
+                # 数字索引转字母
+                if s.isdigit():
+                    idx = int(s)
+                    if 0 <= idx <= 4:
+                        return ['A', 'B', 'C', 'D', 'E'][idx]
+                
+                return s
             
-            # 检查预测是否包含正确答案
-            if gt_str and pred_str and gt_str in pred_str:
-                return True
+            pred_option = extract_option(pred_str)
+            gt_option = extract_option(gt_str)
             
-            # 数字索引匹配
-            try:
-                pred_idx = int(pred_str) if pred_str.isdigit() else -1
-                gt_idx = int(gt_str) if gt_str.isdigit() else -1
-                if pred_idx >= 0 and gt_idx >= 0:
-                    return pred_idx == gt_idx
-            except Exception:
-                pass
+            print(f"提取选项 - 预测选项: '{pred_option}', 答案选项: '{gt_option}'")
             
-            return False
+            # 直接比较选项
+            return pred_option == gt_option
             
         except Exception as e:
             print(f"检查正确性时出错: {e}")

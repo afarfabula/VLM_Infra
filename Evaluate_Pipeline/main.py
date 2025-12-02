@@ -337,7 +337,7 @@ class EvaluatePipeline:
                     # ScienceQA可能需要特殊处理
                     print(f"DEBUG: 处理ScienceQA批次，批次大小: {len(batch)}")
                     # batch是字典，键是字段名，值是列表
-                    questions = batch['question']
+                    questions = batch['prompt_input']
                     print(f"DEBUG: 提取问题完成，问题数量: {len(questions)}")
                     
                     images = []

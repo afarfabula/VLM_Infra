@@ -4,11 +4,28 @@ ScienceQA数据集加载器
 """
 
 import os
+import sys
 import json
+import random
 import torch
 from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 import numpy as np
+
+# 添加ScienceQA目录到sys.path
+scienceqa_path = '/data/model/Inference_VLM/VLM_Infra/datasets/ScienceQA/ScienceQA'
+if scienceqa_path not in sys.path:
+    sys.path.append(scienceqa_path)
+
+# 导入build_prompt函数
+from models.base_prompt import build_prompt
+
+class Args:
+    """模拟args参数对象"""
+    def __init__(self, prompt_format, use_caption, options):
+        self.prompt_format = prompt_format
+        self.use_caption = use_caption
+        self.options = options
 
 class ScienceQADataLoader(Dataset):
     """
@@ -16,7 +33,8 @@ class ScienceQADataLoader(Dataset):
     使用本地problems.json文件和图片数据
     """
     
-    def __init__(self, data_root=None, split='test', image_transform=None):
+    def __init__(self, data_root=None, split='test', image_transform=None, 
+                 prompt_format="QCM-A", use_caption=False, options=["A", "B", "C", "D", "E"], shot_number=3):
         """
         初始化ScienceQA数据加载器
         
@@ -24,6 +42,10 @@ class ScienceQADataLoader(Dataset):
             data_root: 数据集根目录（默认为固定路径）
             split: 数据分割，可选'train', 'val', 'test'
             image_transform: 图像变换函数
+            prompt_format: 提示格式
+            use_caption: 是否使用图像标题
+            options: 选项列表
+            shot_number: few-shot数量
         """
         # 使用固定的本地路径
         if data_root is None:
@@ -32,6 +54,10 @@ class ScienceQADataLoader(Dataset):
         self.data_root = data_root
         self.split = split
         self.image_transform = image_transform
+        self.prompt_format = prompt_format
+        self.use_caption = use_caption
+        self.options = options
+        self.shot_number = shot_number
         
         # 数据文件路径
         self.problems_file = os.path.join(data_root, 'data', 'scienceqa', 'problems.json')
@@ -45,8 +71,20 @@ class ScienceQADataLoader(Dataset):
             print(f"警告: 图片目录不存在: {self.image_dir}，将只加载文本数据")
         
         # 加载问题数据
+        self.problems = self._load_problems()
         self.samples = self._load_samples()
         print(f"加载完成，共包含 {len(self.samples)} 个{split}样本")
+    
+    def _load_problems(self):
+        """
+        加载所有问题数据
+        
+        Returns:
+            dict: 所有问题数据
+        """
+        with open(self.problems_file, 'r', encoding='utf-8') as f:
+            problems = json.load(f)
+        return problems
     
     def _load_samples(self):
         """
@@ -57,12 +95,8 @@ class ScienceQADataLoader(Dataset):
         """
         samples = []
         
-        # 读取problems.json文件
-        with open(self.problems_file, 'r', encoding='utf-8') as f:
-            problems = json.load(f)
-        
         # 筛选指定分割的样本
-        for qid, problem in problems.items():
+        for qid, problem in self.problems.items():
             if problem['split'] == self.split:
                 # 查找对应的图片
                 image_paths = []
@@ -87,7 +121,8 @@ class ScienceQADataLoader(Dataset):
                     'category': problem.get('category', ''),
                     'skill': problem.get('skill', ''),
                     'lecture': problem.get('lecture', ''),
-                    'solution': problem.get('solution', '')
+                    'solution': problem.get('solution', ''),
+                    'caption': problem.get('caption', '')
                 }
                 
                 # 只添加有图像的样本
@@ -140,6 +175,16 @@ class ScienceQADataLoader(Dataset):
             except Exception as e:
                 print(f"警告: 加载图像失败 {image_path}: {e}")
         
+        # 创建args对象用于build_prompt
+        args_obj = Args(self.prompt_format, self.use_caption, self.options)
+        
+        # 随机选择训练示例
+        train_qids = [q['id'] for q in self.samples if q['id'] != qid]
+        shot_qids = random.sample(train_qids, min(self.shot_number, len(train_qids)))
+        
+        # 构建prompt_input
+        prompt_input = build_prompt(self.problems, shot_qids, qid, args_obj)
+        
         # 构建样本字典
         sample_dict = {
             'question_id': qid,
@@ -155,7 +200,8 @@ class ScienceQADataLoader(Dataset):
             'hint': hint,
             'lecture': lecture,
             'solution': solution,
-            'caption': caption
+            'caption': caption,
+            'prompt_input': prompt_input
         }
         
         return sample_dict
@@ -346,7 +392,8 @@ def scienceqa_collate_fn(batch):
     
     return collated_batch
 
-def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, num_samples=None, split='test'):
+def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, num_samples=None, split='test',
+                               prompt_format="QCM-A", use_caption=False, options=["A", "B", "C", "D", "E"], shot_number=3):
     """
     创建ScienceQA数据加载器的工厂函数
     
@@ -356,6 +403,10 @@ def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, nu
         num_workers: 工作线程数
         num_samples: 限制样本数量
         split: 数据分割，可选'train', 'val', 'test'
+        prompt_format: 提示格式
+        use_caption: 是否使用图像标题
+        options: 选项列表
+        shot_number: few-shot数量
         
     Returns:
         DataLoader实例
@@ -364,7 +415,11 @@ def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, nu
     dataset = ScienceQADataLoader(
         data_root=data_root,
         split=split,
-        image_transform=None  # 可以根据需要添加图像变换
+        image_transform=None,  # 可以根据需要添加图像变换
+        prompt_format=prompt_format,
+        use_caption=use_caption,
+        options=options,
+        shot_number=shot_number
     )
     
     # 如果指定了样本数量，截取数据集
@@ -397,7 +452,11 @@ if __name__ == "__main__":
         data_root=data_root,
         split="test",
         batch_size=2,
-        num_workers=0
+        num_workers=0,
+        prompt_format="QCM-A",
+        use_caption=False,
+        options=["A", "B", "C", "D", "E"],
+        shot_number=3
     )
     
     # 显示数据集信息
@@ -421,6 +480,7 @@ if __name__ == "__main__":
         print(f"答案索引: {batch['answer']}")
         print(f"图像路径: {batch['image_path']}")
         print(f"学科: {batch['subject']}")
+        print(f"Prompt Input: {batch['prompt_input'][0][:1000]}...")  # 显示前100个字符
         
         # 只显示第一个批次
         break
