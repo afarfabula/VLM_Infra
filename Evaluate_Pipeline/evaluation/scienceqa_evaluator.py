@@ -317,26 +317,40 @@ class ScienceQAEvaluator:
         prediction_str = str(prediction) if prediction is not None else ""
         ground_truth_str = str(ground_truth) if ground_truth is not None else ""
         
-        # 转换为小写进行比较
-        prediction_lower = prediction_str.lower()
-        ground_truth_lower = ground_truth_str.lower()
+        # 提取预测中的答案
+        def extract_answer(text):
+            # 尝试直接转换为整数
+            if text.isdigit():
+                return int(text)
+            
+            # 匹配 "The answer is X" 格式
+            import re
+            match = re.search(r"[Tt]he answer is ([A-Za-z])", text)
+            if match:
+                letter = match.group(1)
+                # 将字母转换为数字 (A=0, B=1, C=2, D=3, E=4)
+                return ord(letter.upper()) - ord('A')
+            
+            # 匹配单独的字母
+            match = re.match(r"^([A-Za-z])$", text.strip(), re.IGNORECASE)
+            if match:
+                letter = match.group(1)
+                # 将字母转换为数字 (A=0, B=1, C=2, D=3, E=4)
+                return ord(letter.upper()) - ord('A')
+            
+            # 默认返回原始字符串
+            return text
         
-        # 简单的字符串匹配
-        # 如果真实答案包含在预测中，或者预测包含在真实答案中
-        if ground_truth_lower in prediction_lower or prediction_lower in ground_truth_lower:
-            return True
+        # 提取预测和真实答案
+        pred_answer = extract_answer(prediction_str)
+        gt_answer = extract_answer(ground_truth_str)
         
-        # 处理选择题的情况（答案可能是A/B/C/D或数字索引）
-        if len(ground_truth_str) == 1 and ground_truth_str.isalpha():
-            # 检查是否包含字母答案
-            return ground_truth_lower in prediction_lower
+        # 如果都能转换为数字，则比较数字
+        if isinstance(pred_answer, int) and isinstance(gt_answer, int):
+            return pred_answer == gt_answer
         
-        if ground_truth_str.isdigit():
-            # 检查是否包含数字答案
-            return ground_truth_str in prediction_str
-        
-        # 更复杂的匹配逻辑可以在这里添加
-        return False
+        # 否则进行字符串比较
+        return str(pred_answer).lower() == str(gt_answer).lower()
     
     def save_metrics(self, metrics, filename='scienceqa_metrics.json'):
         """
@@ -366,25 +380,26 @@ def create_scienceqa_evaluator(result_dir='./results'):
 
 
 if __name__ == "__main__":
-    # 示例使用
-    evaluator = ScienceQAEvaluator('./example_results')
+    import sys
     
-    # 示例数据
-    example_results = [
-        {
-            'question_id': '1',
-            'model_prediction': 'The answer is A',
-            'ground_truth': 'A',
-            'image_path': '/path/to/image.jpg'
-        },
-        {
-            'question_id': '2',
-            'model_prediction': 'The answer is 3',
-            'ground_truth': '3',
-            'image_path': ''
-        }
-    ]
+    # 检查命令行参数
+    if len(sys.argv) < 2:
+        print("使用方法: python scienceqa_evaluator.py <predictions_file> [result_dir]")
+        sys.exit(1)
+    
+    predictions_file = sys.argv[1]
+    result_dir = sys.argv[2] if len(sys.argv) > 2 else './results'
+    
+    # 创建评估器
+    evaluator = ScienceQAEvaluator(result_dir)
+    
+    # 读取预测结果
+    results = []
+    with open(predictions_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                results.append(json.loads(line.strip()))
     
     # 运行评估
-    metrics = evaluator.evaluate(example_results)
+    metrics = evaluator.evaluate(results)
     print(f"评估指标: {metrics}")

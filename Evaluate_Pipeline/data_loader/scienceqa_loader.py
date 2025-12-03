@@ -34,7 +34,7 @@ class ScienceQADataLoader(Dataset):
     """
     
     def __init__(self, data_root=None, split='test', image_transform=None, 
-                 prompt_format="QCM-A", use_caption=False, options=["A", "B", "C", "D", "E"], shot_number=3):
+                 prompt_format="QCM-A", use_caption=False, options=["A", "B", "C", "D", "E"], shot_number=3, is_test=False):
         """
         初始化ScienceQA数据加载器
         
@@ -46,6 +46,7 @@ class ScienceQADataLoader(Dataset):
             use_caption: 是否使用图像标题
             options: 选项列表
             shot_number: few-shot数量
+            is_test: 是否为测试模式（测试模式下不包含示例）
         """
         # 使用固定的本地路径
         if data_root is None:
@@ -58,6 +59,7 @@ class ScienceQADataLoader(Dataset):
         self.use_caption = use_caption
         self.options = options
         self.shot_number = shot_number
+        self.is_test = is_test
         
         # 数据文件路径
         self.problems_file = os.path.join(data_root, 'data', 'scienceqa', 'problems.json')
@@ -183,7 +185,7 @@ class ScienceQADataLoader(Dataset):
         shot_qids = random.sample(train_qids, min(self.shot_number, len(train_qids)))
         
         # 构建prompt_input
-        prompt_input = build_prompt(self.problems, shot_qids, qid, args_obj)
+        prompt_input = build_prompt(self.problems, shot_qids, qid, args_obj, is_test=self.is_test)
         
         # 构建样本字典
         sample_dict = {
@@ -393,7 +395,7 @@ def scienceqa_collate_fn(batch):
     return collated_batch
 
 def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, num_samples=None, split='test',
-                               prompt_format="QCM-A", use_caption=False, options=["A", "B", "C", "D", "E"], shot_number=3):
+                               prompt_format="QCM-A", use_caption=False, options=["A", "B", "C", "D", "E"], shot_number=3, is_test=False):
     """
     创建ScienceQA数据加载器的工厂函数
     
@@ -407,6 +409,7 @@ def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, nu
         use_caption: 是否使用图像标题
         options: 选项列表
         shot_number: few-shot数量
+        is_test: 是否为测试模式（测试模式下不包含示例）
         
     Returns:
         DataLoader实例
@@ -419,7 +422,8 @@ def create_scienceqa_dataloader(data_root=None, batch_size=32, num_workers=4, nu
         prompt_format=prompt_format,
         use_caption=use_caption,
         options=options,
-        shot_number=shot_number
+        shot_number=shot_number,
+        is_test=is_test
     )
     
     # 如果指定了样本数量，截取数据集

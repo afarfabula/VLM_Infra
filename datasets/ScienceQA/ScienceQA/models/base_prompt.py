@@ -93,28 +93,29 @@ def create_one_example(format, question, context, choice, answer, lecture, solut
     return text
 
 
-def build_prompt(problems, shot_qids, test_qid, args):
+def build_prompt(problems, shot_qids, test_qid, args, is_test=False):
 
     examples = []
 
-    # n-shot training examples
-    for qid in shot_qids:
-        question = get_question_text(problems[qid])
-        context = get_context_text(problems[qid], args.use_caption)
-        choice = get_choice_text(problems[qid], args.options)
-        answer = get_answer(problems[qid], args.options)
-        lecture = get_lecture_text(problems[qid])
-        solution = get_solution_text(problems[qid])
+    if not is_test:
+        # n-shot training examples
+        for qid in shot_qids:
+            question = get_question_text(problems[qid])
+            context = get_context_text(problems[qid], args.use_caption)
+            choice = get_choice_text(problems[qid], args.options)
+            answer = get_answer(problems[qid], args.options)
+            lecture = get_lecture_text(problems[qid])
+            solution = get_solution_text(problems[qid])
 
-        train_example = create_one_example(args.prompt_format,
-                                           question,
-                                           context,
-                                           choice,
-                                           answer,
-                                           lecture,
-                                           solution,
-                                           test_example=False)
-        examples.append(train_example)
+            train_example = create_one_example(args.prompt_format,
+                                               question,
+                                               context,
+                                               choice,
+                                               answer,
+                                               lecture,
+                                               solution,
+                                               test_example=False)
+            examples.append(train_example)
 
     # test example
     question = get_question_text(problems[test_qid])

@@ -259,7 +259,8 @@ class EvaluatePipeline:
                     data_root="/data/model/Inference_VLM/VLM_Infra/datasets/ScienceQA/ScienceQA",
                     batch_size=batch_size,
                     num_workers=4,
-                    num_samples=num_samples
+                    num_samples=num_samples,
+                    is_test=True
                 )
             else:
                 raise ValueError(f"不支持的数据集: {dataset_name}")
@@ -343,9 +344,9 @@ class EvaluatePipeline:
                     images = []
                     # 检查是否有图像
                     for i in range(len(questions)):
-                        print(f"DEBUG: 处理批次项 {i}")
+                        #print(f"DEBUG: 处理批次项 {i}")
                         if 'image_path' in batch and batch['image_path'][i]:
-                            print(f"DEBUG: 项目 {i} 包含图像路径: {batch['image_path'][i]}")
+                            #print(f"DEBUG: 项目 {i} 包含图像路径: {batch['image_path'][i]}")
                             # 通过Subset对象的dataset属性访问原始ScienceQADataLoader对象
                             if hasattr(self.data_loader.dataset, 'dataset'):
                                 # 如果是Subset对象，则访问其dataset属性
@@ -354,14 +355,14 @@ class EvaluatePipeline:
                                 # 直接访问dataset对象
                                 image = self.data_loader.dataset.load_image(batch['image_path'][i])
                             images.append(image)
-                            print(f"DEBUG: 图像加载 {'成功' if image is not None else '失败'}")
+                            #print(f"DEBUG: 图像加载 {'成功' if image is not None else '失败'}")
                         else:
-                            print(f"DEBUG: 项目 {i} 不包含图像或图像路径为空")
+                            #print(f"DEBUG: 项目 {i} 不包含图像或图像路径为空")
                             images.append(None)
-                    print('图像处理完成')
+                    #print('图像处理完成')
                     question_ids = batch['question_id']
                     image_ids = batch['image_path']
-                    print(f"DEBUG: 提取question_ids完成: {len(question_ids)}, image_ids完成: {len(image_ids)}")
+                    #print(f"DEBUG: 提取question_ids完成: {len(question_ids)}, image_ids完成: {len(image_ids)}")
                 
                 print(f"进程 {self.rank} 处理批次 {batch_count + 1}, 样本数: {len(questions)}")
                 

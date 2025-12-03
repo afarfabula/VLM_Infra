@@ -29,6 +29,13 @@ GPU_ID="${4:-1}"  # 默认使用GPU 1
 LOAD_PRECISION="${5:-fp16}"
 USE_FLASH_ATTN="${6:---use-flash-attn}"  # 默认启用Flash Attention
 
+# 获取当前时间戳
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+
+# 创建基于时间戳、数据集和模型的输出目录
+OUTPUT_DIR="./outputs/${TIMESTAMP}_${DATASET}_${MODEL_NAME}"
+mkdir -p "$OUTPUT_DIR"
+
 # 根据数据集选择配置文件
 if [ "$DATASET" = "scienceqa" ]; then
     CONFIG_FILE="configs/scienceqa_config.json"
@@ -43,7 +50,7 @@ case "$DATASET" in
         SAMPLE_COUNT=50
         ;;  
     "scienceqa")
-        SAMPLE_COUNT=50
+        SAMPLE_COUNT=1000
         ;;  
     *)
         SAMPLE_COUNT=50
@@ -56,6 +63,7 @@ echo "启动通用数据集评估..."
 echo "模型: $MODEL_NAME"
 echo "数据集: $DATASET"
 echo "工作目录: $WORK_DIR"
+echo "输出目录: $OUTPUT_DIR"
 
 # 检查GPU状态
 echo "=== GPU状态检查 ==="
@@ -76,7 +84,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID python main.py \
     --dataset "$DATASET" \
     $USE_VISIONZIP \
     $USE_FLASH_ATTN \
-    --output "./single_outputs" \
+    --output "$OUTPUT_DIR" \
     --num_samples $SAMPLE_COUNT \
     --batch_size 32 \
     --load_precision "$LOAD_PRECISION"
