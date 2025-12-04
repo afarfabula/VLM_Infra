@@ -1,0 +1,43 @@
+infer_v9.py
+slurm_*.sh
+slurm-*.out
+.nfs*
+/tests
+
+/datas
+/Qwen
+/result
+
+.vscode
+.gradio
+
+# Python
+__pycache__
+*.pyc
+*.egg-info
+dist
+
+# Log
+*.log
+*.log.*
+
+# Editor
+.idea
+*.swp
+
+# Other
+.DS_Store
+wandb
+output
+
+checkpoints
+ckpts*
+
+.ipynb_checkpoints
+# *.ipynb
+
+# DevContainer
+!.devcontainer/*
+
+# Demo
+serve_images/
