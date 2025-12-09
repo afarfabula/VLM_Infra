@@ -64,10 +64,39 @@ def load_pretrained_model(model_path, model_base, model_name,
             elif 'mistral' in model_name.lower():
                 raise NotImplementedError
             else:
-                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                # Offline-safe: ensure local LLM weights present to avoid remote fetch
+                offline = os.getenv("HF_HUB_OFFLINE", "0") == "1" or os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                def _has_local_llm_weights(path):
+                    try:
+                        for f in os.listdir(path):
+                            if (f.startswith("pytorch_model") and f.endswith(".bin")) or f.endswith(".safetensors"):
+                                return True
+                        # also check shards in subdirs
+                        for root, _, files in os.walk(path):
+                            for f in files:
+                                if f.startswith("pytorch_model") and (f.endswith(".bin") or "-of-" in f):
+                                    return True
+                                if f.endswith(".safetensors"):
+                                    return True
+                    except Exception:
+                        pass
+                    return False
+                if offline and not _has_local_llm_weights(model_path):
+                    raise FileNotFoundError(
+                        f"Offline mode is enabled, but no local LLM weights found under '{model_path}'. "
+                        f"Please provide a local LLaVA-7B directory containing weight shards "
+                        f"(e.g., 'pytorch_model-00001-of-000XX.bin' or 'model.safetensors')."
+                    )
+                # Prefer local-only loading; fallback to LlamaTokenizer if AutoTokenizer needs missing json
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, local_files_only=offline)
+                except Exception:
+                    from transformers import LlamaTokenizer
+                    tokenizer = LlamaTokenizer.from_pretrained(model_path, use_fast=False, local_files_only=offline)
                 model = LlavaLlamaForCausalLM_GP.from_pretrained(
                     model_path,
                     low_cpu_mem_usage=True,
+                    local_files_only=offline,
                     **kwargs
                 )
     else:

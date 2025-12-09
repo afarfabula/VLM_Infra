@@ -30,36 +30,35 @@ def CLIPAttention_forward(
     causal_attention_mask: Optional[torch.Tensor] = None,
     output_attentions: Optional[bool] = False,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    """Input shape: Batch x Time x Channel"""
-
     bsz, tgt_len, embed_dim = hidden_states.size()
 
-    # get query proj
-    query_states = self.q_proj(hidden_states) * self.scale
-    key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
-    raw_key_states = key_states.clone()
-    value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+    scale = getattr(self, "scale", (self.head_dim ** -0.5 if hasattr(self, "head_dim") else 1.0))
+    query_proj = self.q_proj(hidden_states) * scale
+    key_proj = self.k_proj(hidden_states)
+    value_proj = self.v_proj(hidden_states)
 
-    proj_shape = (bsz * self.num_heads, -1, self.head_dim)
-    query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
-    key_states = key_states.view(*proj_shape)
-    value_states = value_states.view(*proj_shape)
+    def _reshape(tensor):
+        return tensor.view(bsz, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    raw_key_states = _reshape(key_proj)
+
+    proj_shape = (bsz * self.num_heads, tgt_len, self.head_dim)
+    query_states = _reshape(query_proj).contiguous().view(*proj_shape)
+    key_states = raw_key_states.contiguous().view(*proj_shape)
+    value_states = _reshape(value_proj).contiguous().view(*proj_shape)
 
     src_len = key_states.size(1)
     attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
 
     if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
         raise ValueError(
-            f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is"
-            f" {attn_weights.size()}"
+            f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
         )
 
-    # apply the causal_attention_mask first
     if causal_attention_mask is not None:
         if causal_attention_mask.size() != (bsz, 1, tgt_len, src_len):
             raise ValueError(
-                f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is"
-                f" {causal_attention_mask.size()}"
+                f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {causal_attention_mask.size()}"
             )
         attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + causal_attention_mask
         attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
@@ -72,39 +71,29 @@ def CLIPAttention_forward(
         attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
         attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
-
-
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
     if output_attentions:
-        # this operation is a bit akward, but it's required to
-        # make sure that attn_weights keeps its gradient.
-        # In order to do so, attn_weights have to reshaped
-        # twice and have to be reused in the following
         attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
         attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
     else:
         attn_weights_reshaped = None
 
-    attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+    dropout_p = getattr(self, "dropout", 0.0)
+    attn_probs = nn.functional.dropout(attn_weights, p=dropout_p, training=self.training)
 
     attn_output = torch.bmm(attn_probs, value_states)
 
     if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
         raise ValueError(
-            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-            f" {attn_output.size()}"
+            f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is {attn_output.size()}"
         )
 
-    attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
-    attn_output = attn_output.transpose(1, 2)
+    attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2)
     attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
 
     attn_output = self.out_proj(attn_output)
 
-    # 这里的第三个返回值 `raw_key_states.mean(1)` 即 VisionZip 的度量 `metric`：
-    # - 先计算未变形的 key（raw_key_states），按注意力头维度取平均，得到每个 token 的稳定向量表示。
-    # - 在指定层（见 CLIP_EncoderLayer_forward）把该 `metric` 暴露给后续步骤使用。
     return attn_output, attn_weights_reshaped, raw_key_states.mean(1)
 
 def CLIP_EncoderLayer_forward(

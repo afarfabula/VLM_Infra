@@ -18,9 +18,13 @@
 *.bin
 *.h5
 *.png
+*.safetensors
 # generated outputs accidentally created by CLI
 --output/
 --pred-jsonl/
+--datas/cot_images_tar_split/
+datas/cot_images_tar_split/
+lmms-eval/models--openai--clip-vit-large-patch14-336/blobs/
 /home/quyanyi/ToRe4VLM_Inf/LLava/Benchmark/VQAv2/Annotations/v2_mscoco_val2014_annotations.json
 /data/model/Inference_VLM/VLM_Infra/datasets/ScienceQA/ScienceQA/tools/**/*.png
 hf_cache/

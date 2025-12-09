@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import os
 
 from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
 
@@ -19,15 +20,92 @@ class CLIPVisionTower(nn.Module):
         elif getattr(args, 'unfreeze_mm_vision_tower', False):
             self.load_model()
         else:
-            self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+            # Resolve local vt_name for cfg_only to avoid remote fetch on delay_load
+            def _valid_local_model_dir(p: str) -> bool:
+                return bool(p) and os.path.isdir(p) and os.path.isfile(os.path.join(p, 'config.json'))
+            vt_name = self.vision_tower_name
+            local_override = os.getenv("LOCAL_CLIP_VISION_PATH", "")
+            offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("TRANSFORMERS_OFFLINE") == "1"
+            if _valid_local_model_dir(local_override):
+                vt_name = local_override
+            elif _valid_local_model_dir(vt_name):
+                vt_name = vt_name
+            elif offline:
+                default_local = "/data/model/Inference_VLM/models-clip-vit-large-patch14-336"
+                if _valid_local_model_dir(default_local):
+                    vt_name = default_local
+                else:
+                    raise RuntimeError(
+                        f"Offline mode set; local CLIP path unresolved. Requested '{self.vision_tower_name}'. "
+                        f"Set LOCAL_CLIP_VISION_PATH to a local directory containing config.json, "
+                        f"or ensure config.mm_vision_tower points to one."
+                    )
+            print(f"[rank {os.getenv('LOCAL_RANK','0')}] CLIP cfg vt_name -> {vt_name} (offline={offline})")
+            self.cfg_only = CLIPVisionConfig.from_pretrained(vt_name, local_files_only=True)
 
     def load_model(self, device_map=None):
         if self.is_loaded:
             print('{} is already loaded, `load_model` called again, skipping.'.format(self.vision_tower_name))
             return
 
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        def _valid_local_model_dir(p: str) -> bool:
+            return bool(p) and os.path.isdir(p) and os.path.isfile(os.path.join(p, 'config.json'))
+
+        vt_name = self.vision_tower_name
+        local_override = os.getenv("LOCAL_CLIP_VISION_PATH", "")
+        offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("TRANSFORMERS_OFFLINE") == "1"
+
+        # Resolve vt_name with strong local preference
+        if _valid_local_model_dir(local_override):
+            vt_name = local_override
+        elif _valid_local_model_dir(vt_name):
+            vt_name = vt_name
+        elif offline:
+            # Last-chance fallback: try default local path for common CLIP-336
+            default_local = "/data/model/Inference_VLM/models-clip-vit-large-patch14-336"
+            if _valid_local_model_dir(default_local):
+                vt_name = default_local
+            else:
+                raise RuntimeError(
+                    f"Offline mode set; local CLIP path unresolved. Requested '{self.vision_tower_name}'. "
+                    f"Set LOCAL_CLIP_VISION_PATH to a local directory containing config.json, "
+                    f"or ensure config.mm_vision_tower points to one."
+                )
+        # Log resolved vt_name for debugging
+        print(f"[rank {os.getenv('LOCAL_RANK','0')}] CLIP vt_name -> {vt_name} (offline={offline})")
+
+        # Strict local load: build processor and model from local files, then load weights manually
+        self.image_processor = CLIPImageProcessor.from_pretrained(vt_name, local_files_only=True)
+        cfg = CLIPVisionConfig.from_pretrained(vt_name, local_files_only=True)
+        self.vision_tower = CLIPVisionModel(cfg)
+        # Find local weight file
+        weight_file = None
+        for cand in ("pytorch_model.bin", "model.safetensors", "vision_model.safetensors", "vision_model.bin"):
+            fp = os.path.join(vt_name, cand)
+            if os.path.isfile(fp):
+                weight_file = fp
+                break
+        if weight_file is None:
+            raise RuntimeError(
+                f"No local CLIP weights found under '{vt_name}'. Expected one of: pytorch_model.bin, model.safetensors."
+            )
+        # Load state dict and filter to vision_model keys if needed
+        if weight_file.endswith('.bin'):
+            state = torch.load(weight_file, map_location='cpu')
+        else:
+            try:
+                from safetensors.torch import load_file as safe_load_file
+            except ImportError:
+                raise ImportError("safetensors is required to load '.safetensors' files locally. Install safetensors or provide .bin weights.")
+            state = safe_load_file(weight_file)
+        vision_state = {k: v for k, v in state.items() if k.startswith('vision_model')}
+        if not vision_state:
+            vision_state = state
+        missing, unexpected = self.vision_tower.load_state_dict(vision_state, strict=False)
+        if missing:
+            print(f"[CLIPVisionTower] missing keys: {len(missing)}")
+        if unexpected:
+            print(f"[CLIPVisionTower] unexpected keys: {len(unexpected)}")
         self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True
@@ -115,14 +193,15 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             print('{} is already loaded, `load_model` called again, skipping.'.format(self.vision_tower_name))
             return
 
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
-        self.vision_tower.requires_grad_(False)
+        # Reuse strict local-only loading from base class
+        super().load_model(device_map=device_map)
 
+        # Apply S2-specific preprocessing sizes
         self.image_processor.size['shortest_edge'] = self.s2_image_size
-        self.image_processor.crop_size['height'] = self.image_processor.crop_size['width'] = self.s2_image_size
+        self.image_processor.crop_size['height'] = self.s2_image_size
+        self.image_processor.crop_size['width'] = self.s2_image_size
 
-        self.is_loaded = True
+        # is_loaded is already set in super().load_model
 
     @torch.no_grad()
     def forward_feature(self, images):

@@ -1971,5 +1971,4 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
         
         model_kwargs.pop("inputs_embeds", None)
         
-        return model_kwargs
-        
+        return model_kwargs        

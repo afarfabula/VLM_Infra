@@ -207,24 +207,35 @@ class VisionZipInference:
                 prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt'
             ).unsqueeze(0).to(self.device)
             
-            # 生成答案
+            # 生成答案（使用流式+停用词，避免空输出）
+            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+            stopping_criteria = StoppingCriteriaList([KeywordsStoppingCriteria([stop_str], self.tokenizer, input_ids)])
+            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+
             with torch.inference_mode():
-                output_ids = self.model.generate(
+                thread = Thread(target=self.model.generate, kwargs=dict(
                     inputs=input_ids,
                     images=image_tensor,
-                    image_sizes=[image_size],
-                    do_sample=True if temperature > 0 else False,
+                    image_sizes=[image_size] if image_size is not None else None,
+                    do_sample=temperature > 0,
                     temperature=temperature,
                     max_new_tokens=max_new_tokens,
-                    use_cache=True
-                )
-            
-            # 解码答案
-            answer = self.tokenizer.decode(
-                output_ids[0][input_ids.shape[1]:], 
-                skip_special_tokens=True
-            ).strip()
-            
+                    use_cache=True,
+                    cache_position=None,
+                    streamer=streamer,
+                    stopping_criteria=stopping_criteria,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                ))
+                thread.start()
+                chunks = []
+                for new_text in streamer:
+                    chunks.append(new_text)
+                thread.join()
+                answer = ''.join(chunks).strip()
+                if answer.endswith(stop_str):
+                    answer = answer[:-len(stop_str)]
+
             # 记录推理时间
             inference_time = time.time() - start_time
             self.inference_times.append(inference_time)
@@ -413,7 +424,7 @@ class VisionZipInference_Batch:
         
         # 注入VisionZip补丁
         print(f"进程 {self.rank} 开始注入VisionZip补丁...")
-        self.model = visionzip(self.model, dominant=self.dominant, contextual=self.contextual)
+        #self.model = visionzip(self.model, dominant=self.dominant, contextual=self.contextual)
         print(f"进程 {self.rank} VisionZip补丁注入完成")
         
         # 设置对话模板

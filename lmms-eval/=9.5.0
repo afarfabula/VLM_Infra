@@ -1,0 +1,10 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Requirement already satisfied: pillow in /data/miniforge3/envs/llava4eva/lib/python3.10/site-packages (10.4.0)
+Collecting pillow
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/ed/1c/880921e98f525b9b44ce747ad1ea8f73fd7e992bafe3ca5e5644bf433dea/pillow-12.0.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (7.0 MB)
+Installing collected packages: pillow
+  Attempting uninstall: pillow
+    Found existing installation: pillow 10.4.0
+    Uninstalling pillow-10.4.0:
+      Successfully uninstalled pillow-10.4.0
+Successfully installed pillow-12.0.0

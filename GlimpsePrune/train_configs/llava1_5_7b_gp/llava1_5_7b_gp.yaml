@@ -1,4 +1,4 @@
-model_name_or_path: liuhaotian/llava-v1.5-7b
+model_name_or_path: /data/model/Inference_VLM/models-LLava-1.5-7B
 train_dataset: dataset_configs/gqa_rand.yaml
 loc_loss_class: MaskLoss
 loc_dice_weight: 1.0
@@ -68,6 +68,7 @@ torch_dtype: bfloat16
 attn_implementation: flash_attention_2
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 8
+gradient_checkpointing: true
 learning_rate: 1e-4
 num_train_epochs: 1
 lr_scheduler_type: cosine

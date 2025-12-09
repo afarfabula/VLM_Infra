@@ -15,7 +15,7 @@ import datasets
 
 from PIL import Image
 
-from utils_llava import MyTrlParser as TrlParser
+from utils.utils_llava import MyTrlParser as TrlParser
 
 from transformers import (
     TrainingArguments, 
@@ -457,7 +457,7 @@ class LlavaGPDataset(torch.utils.data.Dataset):
             try:
                 print_rank0(f"Loading raw data from: {json_path}")
                 # Assuming JSON Lines format, common with `datasets`
-                raw_dataset = datasets.load_dataset('json', data_files=json_path, split='train')
+                raw_dataset = datasets.load_dataset('json', data_files=json_path, split='train', download_mode=datasets.DownloadMode.LOCAL_ONLY)
                 print_rank0(f"Loaded {len(raw_dataset)} examples raw.")
 
                 # Apply sampling

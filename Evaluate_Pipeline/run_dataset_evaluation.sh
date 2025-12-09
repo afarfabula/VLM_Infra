@@ -23,9 +23,9 @@ cd "$WORK_DIR"
 
 # 模型和数据集配置
 MODEL_NAME="${1:-LLaVA-1.5-7B}"
-DATASET="${2:-scienceqa}"  # 默认使用vqav2数据集
+DATASET="${2:-scienceqa}"  # 默认使用scienceqa数据集
 USE_VISIONZIP="${3:---visionzip}"  # 默认使用VisionZip
-GPU_ID="${4:-1}"  # 默认使用GPU 1
+GPU_ID="${4:-0}"  # 默认使用GPU 1
 LOAD_PRECISION="${5:-fp16}"
 USE_FLASH_ATTN="${6:---use-flash-attn}"  # 默认启用Flash Attention
 

@@ -4,7 +4,7 @@ import sys
 from typing import Literal
 
 from loguru import logger
-
+from .chat.visionzip_llava import VisionZipLlavaForLmmsEval
 # os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
 logger.remove()
@@ -96,6 +96,7 @@ AVAILABLE_CHAT_TEMPLATE_MODELS = {
     "async_openai": "AsyncOpenAIChat",
     "longvila": "LongVila",
     "llava_onevision1_5": "Llava_OneVision1_5",
+    "visionzip_llava": "VisionZipLlavaForLmmsEval",
 }
 
 

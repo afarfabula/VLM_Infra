@@ -32,7 +32,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
     if load_8bit:
         kwargs['load_in_8bit'] = True
     elif load_4bit:
-        kwargs['load_in_4bit'] = True
+        #kwargs['load_in_4bit'] = True
         kwargs['quantization_config'] = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
@@ -43,7 +43,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         kwargs['torch_dtype'] = torch.float16
 
     ##if use_flash_attn:
-    kwargs['attn_implementation'] = 'flash_attention_2'
+    kwargs['attn_implementation'] = 'sdpa'
 
     if 'llava' in model_name.lower():
         # Load LLaVA model
