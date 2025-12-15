@@ -16,6 +16,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaPreTrainedModel,
     LlamaDecoderLayer,
     LlamaFlashAttention2,
+    LlamaAttention,
     LlamaMLP,
     LlamaRMSNorm,
     apply_rotary_pos_emb,
@@ -132,9 +133,17 @@ class CondSdpaAttention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        attn_output = F.scaled_dot_product_attention(
-            q, k, v, attention_mask, dropout_p=0.0
-        )
+        if hasattr(F, "scaled_dot_product_attention"):
+            attn_output = F.scaled_dot_product_attention(
+                q, k, v, attention_mask, dropout_p=0.0
+            )
+        else:
+            dim = q.size(-1)
+            scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(dim)
+            if attention_mask is not None:
+                scores = scores + attention_mask
+            probs = torch.softmax(scores, dim=-1)
+            attn_output = torch.matmul(probs, v)
         
         attn_output = attn_output.transpose(1, 2)  # [bsz, seq_length, num_heads, head_dim]
         attn_output = attn_output.reshape(bsz, seq_length, -1)  # [bsz, seq_length, hidden_size]
@@ -209,7 +218,8 @@ class AttnFuserV1(BaseAttnFuser):
         num_layers = len(config.selected_visual_layers)
         visual_cond_size = config.visual_cond_size if num_layers > 0 else 0
         num_attn_heads = config.num_attention_heads
-        self.attn_in_proj = nn.Linear(num_attn_heads, attn_fuse_size)
+        num_llm_layers = max(1, len(config.selected_layers))
+        self.attn_in_proj = nn.Linear(num_llm_layers * num_attn_heads, attn_fuse_size)
         self.cond_in_projs = nn.ModuleList()
         self.layers = nn.ModuleList()
         self.attn_out_projs = nn.ModuleList()
@@ -243,6 +253,7 @@ class AttnFuserV1(BaseAttnFuser):
         attn_outs = []
         bsz = attn_map.shape[0]
         h, w = attn_grid_hw
+        attn_map = torch.nan_to_num(attn_map, nan=0.0, posinf=0.0, neginf=0.0)
         if self.config.ori_attn_supervision and not self.training:
             attn_map_mean = attn_map.mean(dim=-1)  # bsz, h*w
             if self.config.use_attention_logits:
@@ -269,9 +280,11 @@ class AttnFuserV1(BaseAttnFuser):
                 if isinstance(attn_out_proj, nn.Identity):
                     continue  # not deep supervision
                 aux_attn_out = attn_out_proj(attn_hiddens).squeeze(-1)
+                aux_attn_out = torch.nan_to_num(aux_attn_out, nan=0.0, posinf=0.0, neginf=0.0)
                 attn_outs.append(aux_attn_out)
 
         attn_outs = torch.stack(attn_outs, dim=1)  # [bsz, L, h*w]
+        attn_outs = torch.nan_to_num(attn_outs, nan=0.0, posinf=0.0, neginf=0.0)
         return attn_outs
 
 
@@ -288,6 +301,7 @@ class LlavaGPOutputWithPast(ModelOutput):
     grid_hw: Optional[Tuple[int, int]] = None
     image_token_mask_logits: Optional[torch.Tensor] = None
     image_token_bool_masks: Optional[torch.Tensor] = None
+    le_valid_tokens_model: Optional[torch.FloatTensor] = None
     
 
 class LlavaConfig_GP(LlamaConfig):
@@ -382,17 +396,22 @@ class LlavaConfig_GP(LlamaConfig):
         self.max_remain_ratio = max_remain_ratio
     
     
-def convert_2d_to_4d_mask(mask_2d: torch.Tensor, 
+def convert_2d_to_4d_mask(mask: torch.Tensor, 
                           query_seq_len: int, 
                           dtype: torch.dtype = torch.float32) -> torch.Tensor:
-    batch_size, key_seq_len = mask_2d.shape
-    mask_4d = mask_2d.unsqueeze(1).unsqueeze(2)
-    mask_4d = mask_4d.expand(batch_size, 1, query_seq_len, key_seq_len)
-    mask_4d = mask_4d.to(dtype)
-    inverted_mask = 1 - mask_4d
-    masked_value = -torch.inf
-    inverted_mask = inverted_mask.masked_fill(inverted_mask == 1, masked_value)
-    return inverted_mask
+    if mask.dim() == 2:
+        batch_size, key_seq_len = mask.shape
+        mask_4d = mask.unsqueeze(1).unsqueeze(2)
+        mask_4d = mask_4d.expand(batch_size, 1, query_seq_len, key_seq_len)
+        mask_4d = mask_4d.to(dtype)
+        inverted_mask = 1 - mask_4d
+        masked_value = -torch.inf
+        inverted_mask = inverted_mask.masked_fill(inverted_mask == 1, masked_value)
+        return inverted_mask
+    elif mask.dim() == 4:
+        return mask.to(dtype)
+    else:
+        raise ValueError(f"Unsupported attention mask dims: {mask.shape}")
 
 
 class LlamaFlashAttention2_GP(LlamaFlashAttention2):
@@ -455,7 +474,7 @@ class LlamaFlashAttention2_GP(LlamaFlashAttention2):
         # So we use the max position id as seq_len
         kv_seq_len = position_ids.max().item() + 1
         
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        cos, sin = self.rotary_emb(value_states, position_ids)
         
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
@@ -506,8 +525,89 @@ class LlamaFlashAttention2_GP(LlamaFlashAttention2):
         return attn_output, attn_weights, past_key_value
     
 
+class LlamaAttention_GP(LlamaAttention):
+    def _cal_attn_weights(self,
+                          query_states: torch.Tensor,
+                          key_states: torch.Tensor,
+                          attention_mask: Optional[torch.Tensor]=None,
+                          q_indices: Optional[List[int]]=None,
+                          kv_mask: Optional[torch.Tensor]=None,
+                          use_attention_logits: bool = False
+                          ):
+        bsz, nheads, _, head_dim = query_states.size()
+        selected_query_states = query_states[list(range(bsz)), :, q_indices, :].view(bsz, nheads, 1, head_dim)
+        attn_weights = torch.matmul(selected_query_states, key_states.transpose(-1, -2)) / math.sqrt(self.head_dim)
+        if not use_attention_logits:
+            if attention_mask is not None:
+                attention_mask_4d = convert_2d_to_4d_mask(attention_mask, 1, dtype=attn_weights.dtype)
+                attn_weights = attn_weights + attention_mask_4d
+            attn_weights = torch.log_softmax(attn_weights, dim=-1)
+        if kv_mask is not None:
+            attn_weights = attn_weights.squeeze(2)
+            attn_weights = attn_weights.transpose(1, 2)
+            selected_attn_weights = attn_weights[kv_mask]
+            kv_length = kv_mask.sum(dim=-1)
+            attn_weights = selected_attn_weights.split(kv_length.tolist(), dim=0)
+        return attn_weights
+    
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        q_indices: Optional[List[int]] = None,
+        kv_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        bsz, q_len, _ = hidden_states.size()
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+        
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        
+        kv_seq_len = position_ids.max().item() + 1
+        
+        cos, sin = self.rotary_emb(value_states, position_ids)
+        
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        
+        attn_weights = None
+        if output_attentions:
+            attn_weights = self._cal_attn_weights(query_states, key_states, attention_mask, 
+                                                  q_indices=q_indices, kv_mask=kv_mask, use_attention_logits=self.config.use_attention_logits)
+        
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        
+        dtype = query_states.dtype
+        attn_scores = torch.matmul(query_states.to(dtype), key_states.to(dtype).transpose(-1, -2)) / math.sqrt(self.head_dim)
+        if attention_mask is not None:
+            attn_scores = attn_scores + attention_mask
+        attn_probs = torch.softmax(attn_scores, dim=-1)
+        dropout_rate = self.attention_dropout if self.training else 0.0
+        if dropout_rate > 0:
+            attn_probs = F.dropout(attn_probs, p=dropout_rate)
+        attn_output = torch.matmul(attn_probs, value_states)
+        
+        attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, q_len, self.hidden_size)
+        attn_output = self.o_proj(attn_output)
+        
+        return attn_output, attn_weights, past_key_value
+
 LLAMA_ATTENTION_CLASSES_GP = {
     "flash_attention_2": LlamaFlashAttention2_GP,
+    "eager": LlamaAttention_GP,
+    "sdpa": LlamaAttention_GP,
 }
 
 
@@ -569,6 +669,31 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
         self._init_new_modules(config, re_init=False)
         # Initialize weights and apply final processing
         self.post_init()
+    
+    def _gradient_checkpointing_func(
+        self,
+        func,
+        hidden_states,
+        causal_mask,
+        position_ids,
+        past_key_values,
+        output_attentions,
+        use_cache,
+        q_indices,
+        kv_mask,
+    ):
+        def custom_forward(x):
+            return func(
+                x,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_values,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+                q_indices=q_indices,
+                kv_mask=kv_mask,
+            )
+        return torch.utils.checkpoint.checkpoint(custom_forward, hidden_states)
 
     def _init_new_modules(self, config, re_init=False):
         self.config = config
@@ -1021,13 +1146,11 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
             source_labels = torch.cat([labels, le_labels], dim=1)
             labels = torch.gather(source_labels, 1, gather_indices)
 
-        # It is simpler to deal with attention_mask, position_ids
         attention_mask = torch.cat([attention_mask, torch.ones((bsz, le_len), device=attention_mask.device, dtype=attention_mask.dtype)], dim=1)
         le_pos_ids = []
         for b in range(bsz):
             one_last_pos_idx = position_ids[b, -1].item()
-            one_le_pos_ids = torch.arange(one_last_pos_idx + 1, one_last_pos_idx + 1 + le_len, device=position_ids.device)
-            one_le_pos_ids = one_le_pos_ids.unsqueeze(0)
+            one_le_pos_ids = torch.arange(one_last_pos_idx + 1, one_last_pos_idx + 1 + le_len, device=position_ids.device).unsqueeze(0)
             le_pos_ids.append(one_le_pos_ids)
         le_pos_ids = torch.cat(le_pos_ids, dim=0)  # B, le_len
         position_ids = torch.cat([position_ids, le_pos_ids], dim=1)
@@ -1110,6 +1233,16 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
                 kv_cache.value_cache[idx] = kv_cache.value_cache[idx][..., :max_length, :]
                 
     def _decode_image_token_mask_logits(self, batched_attn_map, grid_hw, selected_image_embeds):
+        bsz, num_tokens, last_dim = batched_attn_map.shape
+        expected_layers = max(1, len(self.config.selected_layers))
+        expected_heads = self.config.num_attention_heads
+        expected_dim = expected_layers * expected_heads
+        if last_dim != expected_dim and last_dim % expected_heads == 0:
+            k_mul = last_dim // expected_heads
+            if k_mul % expected_layers == 0:
+                k_len = k_mul // expected_layers
+                batched_attn_map = batched_attn_map.view(bsz, num_tokens, expected_layers, expected_heads, k_len).mean(-1).flatten(2)
+        batched_attn_map = torch.nan_to_num(batched_attn_map, nan=0.0, posinf=0.0, neginf=0.0)
         return self.attn_fuser(batched_attn_map, grid_hw, selected_image_embeds)
         
     def _get_remain_masks(self, input_ids, attention_mask, image_token_mask_logits, grid_hw):
@@ -1489,15 +1622,19 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
             hidden_states_for_reduction = hidden_states
             kv_cache_for_reduction = next_decoder_cache if use_cache else None
 
+        le_valid_tokens_model = None
         if labels is not None:
+            hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=0.0, neginf=0.0)
             le_logits = self.lm_head(hidden_states).float()
             shift_le_logits = le_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            loss_fct = nn.CrossEntropyLoss()
-            shift_le_logits = shift_le_logits.view(-1, self.config.vocab_size)
-            shift_labels = shift_labels.view(-1)
-            shift_labels = shift_labels.to(shift_le_logits.device)
-            le_loss = loss_fct(shift_le_logits, shift_labels)
+            valid_mask = (shift_labels != IGNORE_INDEX)
+            le_valid_tokens_model = valid_mask.sum().to(dtype=hidden_states.dtype)
+            loss_fct = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
+            if le_valid_tokens_model.item() > 0:
+                le_loss = loss_fct(shift_le_logits.view(-1, self.config.vocab_size), shift_labels.view(-1).to(shift_le_logits.device))
+            else:
+                le_loss = loss_fct(le_logits.view(-1, self.config.vocab_size), labels.view(-1).to(le_logits.device))
             del le_logits, shift_le_logits, shift_labels
         else:
             le_loss = None
@@ -1545,6 +1682,7 @@ class LlavaLlamaForCausalLM_GP(LlamaForCausalLM, LlavaMetaForCausalLM):
             rtn_dict = LlavaGPOutputWithPast(
                     logits=logits,
                     le_loss=le_loss,
+                    le_valid_tokens_model=le_valid_tokens_model,
                     past_key_values=kv_cache_for_reduction,
                     hidden_states=hidden_states_for_reduction,
                     input_ids=input_ids,

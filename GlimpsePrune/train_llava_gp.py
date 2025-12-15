@@ -1,4 +1,7 @@
 import os
+os.environ["HF_HOME"] = "/data/model/Inference_VLM/VLM_Infra/GlimpsePrune/datas/.cache/huggingface"
+os.environ["HF_DATASETS_CACHE"] = "/data/model/Inference_VLM/VLM_Infra/GlimpsePrune/datas/.cache/huggingface/datasets"
+os.environ.pop("TRANSFORMERS_CACHE", None)
 import yaml
 import warnings
 from datetime import datetime
@@ -7,6 +10,7 @@ from collections import defaultdict
 from typing import Any, Callable, Optional, Union, Sized, Dict, Tuple, List, Literal, Type
 
 import numpy as np
+import json
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -29,7 +33,7 @@ from transformers.utils import (
 from accelerate.utils import set_seed
 
 
-from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from llava.constants import DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IGNORE_INDEX
 from llava.conversation import conv_templates
 from llava_gp.mm_utils import (
     get_model_name_from_path,
@@ -101,7 +105,23 @@ def cot_train_dataset_mapper(one_data, **kwargs):
     answer = one_data['answer']
     image = one_data['image']
     dataset = one_data['dataset']
-    img_path = os.path.join(kwargs['img_dir'], "cot", dataset, image)
+    base_dir = kwargs['img_dir']
+    cand1 = os.path.join(base_dir, "cot", dataset, image)
+    cand2 = os.path.join(base_dir, "cot", "cot_image_data", dataset, image)
+    cand3 = os.path.join(base_dir, "cot_image_data", dataset, image)
+    cand4 = os.path.join(base_dir, dataset, image)
+    cand5 = os.path.join(base_dir, image)
+    img_path = cand1
+    if os.path.exists(cand1):
+        img_path = cand1
+    elif os.path.exists(cand2):
+        img_path = cand2
+    elif os.path.exists(cand3):
+        img_path = cand3
+    elif os.path.exists(cand4):
+        img_path = cand4
+    elif os.path.exists(cand5):
+        img_path = cand5
     bboxes = one_data['bboxs']
     # normed_bboxes = norm_bboxes(bboxes, height, width, bbox_type=kwargs['bbox_type'])
     
@@ -122,7 +142,17 @@ def cot_train_fullmask_dataset_mapper(one_data, **kwargs):
     answer = one_data['answer']
     image = one_data['image']
     dataset = one_data['dataset']
-    img_path = os.path.join(kwargs['img_dir'], "cot", dataset, image)
+    base_dir = kwargs['img_dir']
+    cand1 = os.path.join(base_dir, "cot", dataset, image)
+    cand2 = os.path.join(base_dir, dataset, image)
+    cand3 = os.path.join(base_dir, image)
+    img_path = cand1
+    if os.path.exists(cand1):
+        img_path = cand1
+    elif os.path.exists(cand2):
+        img_path = cand2
+    elif os.path.exists(cand3):
+        img_path = cand3
     normed_bboxes = [[0.0, 0.0, 1.0, 1.0]]
     
     return {
@@ -232,18 +262,20 @@ class DiceLoss(nn.Module):
             # Or raise ValueError("Input lists cannot be empty") depending on desired behavior
 
         batch_size = len(image_token_masks)
-        total_dice_loss = 0.0
+        total_dice_loss = torch.tensor(0.0, device=image_token_masks[0].device, dtype=torch.float32)
 
         for i in range(batch_size):
-            pred_mask_1d = image_token_masks[i].flatten().sigmoid() # Shape: (N_b,) float
+            logits_1d = image_token_masks[i].flatten().to(dtype=torch.float32)
+            logits_1d = torch.nan_to_num(logits_1d, nan=0.0, posinf=20.0, neginf=-20.0)
+            pred_mask_1d = logits_1d.sigmoid()
             # Flatten the ground truth mask and convert to float
             # Ensure it's on the same device as the prediction
-            gt_mask_1d = ref_token_masks[i].flatten().to(pred_mask_1d.device, dtype=torch.float) # Shape: (N_b,) float
+            gt_mask_1d = ref_token_masks[i].flatten().to(pred_mask_1d.device, dtype=torch.float32) # Shape: (N_b,) float
 
             # Calculate Dice components
-            intersection = (pred_mask_1d * gt_mask_1d).sum()
-            pred_sum = pred_mask_1d.sum()
-            gt_sum = gt_mask_1d.sum() # Already float
+            intersection = (pred_mask_1d * gt_mask_1d).sum(dtype=torch.float32)
+            pred_sum = pred_mask_1d.sum(dtype=torch.float32)
+            gt_sum = gt_mask_1d.sum(dtype=torch.float32) # Already float
 
             # Calculate Dice coefficient for this sample
             dice_coefficient = (2.0 * intersection + self.epsilon) / (pred_sum + gt_sum + self.epsilon)
@@ -252,16 +284,16 @@ class DiceLoss(nn.Module):
             dice_loss_sample = 1.0 - dice_coefficient
 
             # Accumulate loss
-            total_dice_loss += dice_loss_sample
+            total_dice_loss = total_dice_loss + dice_loss_sample
 
         # Average loss over the batch
-        average_dice_loss = total_dice_loss / batch_size
+        average_dice_loss = total_dice_loss / float(batch_size)
         return average_dice_loss
 
 
 @register_loss
 class BCELoss(nn.Module):
-    def ___init__(self, **kwargs):
+    def __init__(self, **kwargs):
         super(BCELoss, self).__init__()
         
     def forward(self, 
@@ -270,20 +302,21 @@ class BCELoss(nn.Module):
                ) -> torch.Tensor:
         
         batch_size = len(image_token_masks)
-        total_bce_loss = 0.0
+        total_bce_loss = torch.tensor(0.0, device=image_token_masks[0].device, dtype=torch.float32)
         for i in range(batch_size):
-            pred_mask_1d = image_token_masks[i].flatten()
+            logits_1d = image_token_masks[i].flatten().to(dtype=torch.float32)
+            logits_1d = torch.nan_to_num(logits_1d, nan=0.0, posinf=20.0, neginf=-20.0).clamp(min=-20.0, max=20.0)
             # Flatten the ground truth mask and convert to float
-            gt_mask_1d = ref_token_masks[i].flatten().to(pred_mask_1d.device)
+            gt_mask_1d = ref_token_masks[i].flatten().to(logits_1d.device, dtype=torch.float32)
             # Calculate BCE loss
             bce_loss = F.binary_cross_entropy_with_logits(
-                pred_mask_1d.float(),
+                logits_1d,
                 gt_mask_1d.float(),
             )
             # Accumulate loss
-            total_bce_loss += bce_loss
+            total_bce_loss = total_bce_loss + bce_loss
         # Average loss over the batch
-        average_bce_loss = total_bce_loss / batch_size
+        average_bce_loss = total_bce_loss / float(batch_size)
         return average_bce_loss
 
 
@@ -457,7 +490,7 @@ class LlavaGPDataset(torch.utils.data.Dataset):
             try:
                 print_rank0(f"Loading raw data from: {json_path}")
                 # Assuming JSON Lines format, common with `datasets`
-                raw_dataset = datasets.load_dataset('json', data_files=json_path, split='train', download_mode=datasets.DownloadMode.LOCAL_ONLY)
+                raw_dataset = datasets.load_dataset('json', data_files=json_path, split='train')
                 print_rank0(f"Loaded {len(raw_dataset)} examples raw.")
 
                 # Apply sampling
@@ -582,7 +615,7 @@ class LlavaGPCollator:
 
     def _prepare_label(self, input_id: torch.Tensor, input_id_wo_answer: torch.Tensor):
         label = input_id.clone()
-        label[:input_id_wo_answer.shape[0]] = IMAGE_TOKEN_INDEX
+        label[:input_id_wo_answer.shape[0]] = IGNORE_INDEX
         return label
     
     def __call__(self, features):
@@ -648,7 +681,7 @@ class LlavaGPCollator:
         padded_input_ids[attention_mask.bool()] = torch.cat(input_ids, dim=0)
 
         if labels is not None:
-            padded_labels = torch.full((bsz, max_len), IMAGE_TOKEN_INDEX ,dtype=torch.long)
+            padded_labels = torch.full((bsz, max_len), IGNORE_INDEX ,dtype=torch.long)
             padded_labels[attention_mask.bool()] = torch.cat(labels, dim=0)
 
 
@@ -727,12 +760,19 @@ class LlavaGPTrainer(Trainer):
     
             
     def log(self, logs: dict[str, float]) -> None:
-        # gather box_conf_mat
-        # local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        # print(f"Rank {local_rank}: box_conf_mat: {self._box_conf_mat}")
-        box_conf_mat_list = self.accelerator.gather_for_metrics(self._loc_conf_mat_list)
-        if len(box_conf_mat_list) > 0:
-            box_conf_mat = torch.sum(torch.stack(box_conf_mat_list, dim=0), dim=0)
+        logs.pop("grad_norm", None)
+        local_conf_mat = None
+        if len(self._loc_conf_mat_list) > 0:
+            local_conf_mat = torch.stack(self._loc_conf_mat_list, dim=0).sum(dim=0)
+        gathered_conf_mats = []
+        if local_conf_mat is not None:
+            gathered = self.accelerator.gather_for_metrics(local_conf_mat)
+            if isinstance(gathered, torch.Tensor):
+                gathered_conf_mats.append(gathered)
+            else:
+                gathered_conf_mats.extend(gathered)
+        if len(gathered_conf_mats) > 0:
+            box_conf_mat = torch.stack(gathered_conf_mats, dim=0).sum(dim=0)
             tp = box_conf_mat[0, 0].item()
             fp = box_conf_mat[0, 1].item()
             fn = box_conf_mat[1, 0].item()
@@ -741,17 +781,18 @@ class LlavaGPTrainer(Trainer):
             recall = tp / (tp + fn) if tp + fn > 0 else 0
             f1 = 2 * (precision * recall) / (precision + recall) if precision + recall > 0 else 0
             iou = tp / (tp + fp + fn) if tp + fp + fn > 0 else 0
-            box_metrics = {
-                "box/precision": precision,
-                "box/recall": recall,
-                "box/f1": f1,
-                "box/iou": iou
-            }
+            box_metrics = {"box/precision": precision, "box/recall": recall, "box/f1": f1, "box/iou": iou}
         else:
-            box_metrics = {
-            }
+            box_metrics = {}
         metrics = {key: sum(val) / len(val) for key, val in self._metrics.items()}  # average the metrics
         logs = {**logs, **metrics, **box_metrics}
+        try:
+            json_path = os.path.join(self.args.output_dir, "train_log.jsonl")
+            payload = {"step": int(self.state.global_step), **logs}
+            with open(json_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
         super().log(logs)
         self._metrics.clear()
         self._loc_conf_mat_list.clear()
@@ -786,14 +827,44 @@ class LlavaGPTrainer(Trainer):
             delay_selection=True,
         )
         le_loss = outputs.le_loss
+        
+        # Debug metrics: ref mask ratio and predicted mask ratio (last layer)
+        try:
+            ref_masks = inputs.get("ref_token_masks", None)
+            if ref_masks is not None and len(ref_masks) > 0:
+                ref_ratios = [rm.float().mean().item() for rm in ref_masks]
+                avg_ref_ratio = sum(ref_ratios) / len(ref_ratios)
+                self._metrics["ref_mask_ratio"].append(self.accelerator.gather_for_metrics(torch.tensor(avg_ref_ratio, device=self.accelerator.device, dtype=torch.float32)).mean().item())
+            if "image_token_mask_logits" in outputs and outputs["image_token_mask_logits"] is not None:
+                pred_probs = []
+                for one_mask in outputs["image_token_mask_logits"]:
+                    last_logits = one_mask[-1]
+                    last_logits = torch.nan_to_num(last_logits, nan=0.0, posinf=0.0, neginf=0.0)
+                    pred_probs.append(last_logits.sigmoid().mean().item())
+                avg_pred_ratio = sum(pred_probs) / len(pred_probs) if len(pred_probs) > 0 else 0.0
+                self._metrics["pred_mask_ratio"].append(self.accelerator.gather_for_metrics(torch.tensor(avg_pred_ratio, device=self.accelerator.device, dtype=torch.float32)).mean().item())
+        except Exception:
+            pass
 
         loc_loss = self._calculate_loc_loss(inputs, outputs)
         le_loss = outputs.get("le_loss", None)
         if le_loss is None:
-            le_loss = 0
+            le_loss = torch.zeros((), device=self.accelerator.device, dtype=torch.float32)
         else:
+            if torch.isnan(le_loss):
+                le_loss = torch.zeros_like(le_loss)
             le_loss = self.le_weight * le_loss
+            le_loss = le_loss if isinstance(le_loss, torch.Tensor) else torch.tensor(le_loss, device=self.accelerator.device, dtype=torch.float32)
             self._metrics["le_loss"].append(self.accelerator.gather_for_metrics(le_loss).mean().item())
+        
+        if "labels" in inputs and inputs["labels"] is not None:
+            labels = inputs["labels"]
+            per_sample_valid = (labels != IGNORE_INDEX).sum(dim=1).float()
+            avg_valid = per_sample_valid.mean().item()
+            self._metrics["le_valid_tokens"].append(self.accelerator.gather_for_metrics(torch.tensor(avg_valid, device=self.accelerator.device, dtype=torch.float32)).mean().item())
+            if labels.shape[1] > 1:
+                shift_valid = (labels[:, 1:] != IGNORE_INDEX).sum(dim=1).float().mean().item()
+                self._metrics["le_valid_tokens_shift"].append(self.accelerator.gather_for_metrics(torch.tensor(shift_valid, device=self.accelerator.device, dtype=torch.float32)).mean().item())
         return loc_loss + le_loss
 
 

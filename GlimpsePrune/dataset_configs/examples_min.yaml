@@ -1,0 +1,8 @@
+datasets:
+  - json_path: viscot_dataset/examples_cot_train.jsonl
+    sampling_strategy: random:4
+    sampling_seed: 42
+    mapper: cot_train_fullmask
+    bbox_type: xyxy
+    img_dir: llava/serve/examples
+    additional_mappers: []

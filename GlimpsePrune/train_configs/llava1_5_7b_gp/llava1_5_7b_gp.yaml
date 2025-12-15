@@ -1,5 +1,11 @@
 model_name_or_path: /data/model/Inference_VLM/models-LLava-1.5-7B
-train_dataset: dataset_configs/gqa_rand.yaml
+train_dataset: /data/model/Inference_VLM/VLM_Infra/GlimpsePrune/dataset_configs/gqa_rand.yaml
+env:
+  WANDB_DISABLED: "true"
+  HF_HUB_OFFLINE: "1"
+  HF_HOME: "/data/model/Inference_VLM/VLM_Infra/GlimpsePrune/datas/.cache/huggingface"
+  HF_DATASETS_CACHE: "/data/model/Inference_VLM/VLM_Infra/GlimpsePrune/datas/.cache/huggingface/datasets"
+img_dir: /data/model/Inference_VLM/VLM_Infra/GlimpsePrune/datas
 loc_loss_class: MaskLoss
 loc_dice_weight: 1.0
 loc_bce_weight: 0.1
@@ -65,7 +71,7 @@ run_name: llava1_5_7b_gp_0801
 
 bf16: true
 torch_dtype: bfloat16
-attn_implementation: flash_attention_2
+attn_implementation: eager
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 8
 gradient_checkpointing: true
@@ -73,7 +79,10 @@ learning_rate: 1e-4
 num_train_epochs: 1
 lr_scheduler_type: cosine
 warmup_ratio: 0.1
+ddp_find_unused_parameters: true
 
 remove_unused_columns: false
-logging_steps: 10
-save_steps: 500
+logging_steps: 5
+save_steps: 100
+max_steps: 2000
+report_to: none
