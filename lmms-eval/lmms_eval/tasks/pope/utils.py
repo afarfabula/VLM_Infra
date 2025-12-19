@@ -16,6 +16,34 @@ def pope_doc_to_text(doc, lmms_eval_specific_kwargs):
 
 def pope_process_results(doc, results):
     pred = results[0].lower().strip()
+    
+    # Extract yes/no from the prediction
+    # Handle both simple and complex responses
+    # Look for yes/no at the beginning of the response, which is where the answer typically is
+    pred_words = pred.split()
+    if pred_words:
+        first_word = pred_words[0]
+        # Check if the first word is a clear yes/no
+        if first_word in ["yes", "no"]:
+            pred = first_word
+        elif first_word.startswith("yes"):
+            pred = "yes"
+        elif first_word.startswith("no"):
+            pred = "no"
+        else:
+            # If the first word doesn't clearly indicate yes/no, 
+            # look for yes/no in the entire response
+            if "yes" in pred and "no" not in pred:
+                pred = "yes"
+            elif "no" in pred and "yes" not in pred:
+                pred = "no"
+            else:
+                # If ambiguous, default to "no"
+                pred = "no"
+    else:
+        # Empty response, default to "no"
+        pred = "no"
+    
     gt_ans = doc["answer"].lower().strip()
     assert gt_ans in ["yes", "no"]
     score = 1.0 if pred == gt_ans else 0.0

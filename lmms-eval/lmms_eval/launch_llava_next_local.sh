@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 # 激活 lmms-eval Conda 环境（尝试常见安装路径）
 # 尝试加载conda.sh，即使conda命令已经可用，也需要它来使用conda activate
@@ -29,7 +29,7 @@ if ! command -v conda >/dev/null 2>&1; then
   exit 1
 fi
 
-conda activate lmms-eval
+conda activate llava-next
 
 # 进入工程目录
 cd /data/model/Inference_VLM/VLM_Infra/lmms-eval
@@ -38,17 +38,24 @@ cd /data/model/Inference_VLM/VLM_Infra/lmms-eval
 export HF_HOME="/data/model/Inference_VLM/.cache"
 export HUGGINGFACE_HUB_CACHE="/data/model/Inference_VLM/.cache"
 export TRANSFORMERS_CACHE="/data/model/Inference_VLM/.cache"
+# 修改PYTHONPATH以匹配直接运行时的环境
+unset PYTHONPATH
+
+# 抑制PyTorch模型加载时的未使用权重警告
+export PYTHONWARNINGS="ignore::UserWarning"
+# 确保正确的字符编码
+export PYTHONIOENCODING=utf-8
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
 
 # 可选参数：PRECISION 默认 4bit；SUFFIX 默认 pope
 PRECISION="${1:-4bit}"
 SUFFIX="${2:-pope}"
 
 python -m lmms_eval \
-  --model visionzip_llava \
-  --model_args pretrained=/data/model/Inference_VLM/models-LLava-1.5-7B,device=cuda,load_precision="${PRECISION}",use_flash_attn=True \
+  --model llava_next_local_chat \
   --tasks pope \
   --batch_size 1 \
   --log_samples \
-  --limit 10\
   --log_samples_suffix "${SUFFIX}" \
   --output_path ./logs/

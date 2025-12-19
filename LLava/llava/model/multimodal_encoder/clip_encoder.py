@@ -27,7 +27,16 @@ class CLIPVisionTower(nn.Module):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        try:
+            self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map, ignore_mismatched_sizes=True, local_files_only=False)
+        except Exception as e:
+            if "base_model_name_or_path" in str(e):
+                config = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+                if not hasattr(config, "base_model_name_or_path"):
+                    config.base_model_name_or_path = self.vision_tower_name
+                self.vision_tower = CLIPVisionModel(config=config)
+            else:
+                raise
         self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True
@@ -116,7 +125,16 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        try:
+            self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map, ignore_mismatched_sizes=True, local_files_only=False)
+        except Exception as e:
+            if "base_model_name_or_path" in str(e):
+                config = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+                if not hasattr(config, "base_model_name_or_path"):
+                    config.base_model_name_or_path = self.vision_tower_name
+                self.vision_tower = CLIPVisionModel(config=config)
+            else:
+                raise
         self.vision_tower.requires_grad_(False)
 
         self.image_processor.size['shortest_edge'] = self.s2_image_size

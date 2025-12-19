@@ -93,10 +93,10 @@ AVAILABLE_CHAT_TEMPLATE_MODELS = {
     "vllm_generate": "VLLMGenerate",
     "sglang": "Sglang",
     "huggingface": "Huggingface",
-    "async_openai": "AsyncOpenAIChat",
     "longvila": "LongVila",
     "llava_onevision1_5": "Llava_OneVision1_5",
     "visionzip_llava": "VisionZipLlavaForLmmsEval",
+    "llava_next_local_chat": "lmms_eval.models.chat.llava_next_local.LlavaNextLocalChat",
 }
 
 

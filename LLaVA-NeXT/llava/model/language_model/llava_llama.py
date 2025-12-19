@@ -125,15 +125,20 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         inputs: Optional[torch.Tensor] = None,
         images: Optional[torch.Tensor] = None,
         image_sizes: Optional[torch.Tensor] = None,
-        modalities: Optional[List[str]] = ["image"],
+        modalities: Optional[List[str]] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        modalities = kwargs.pop("modalities", None) if "modalities" in kwargs and modalities is None else modalities
+        # 从kwargs中获取modalities参数
+        modalities = kwargs.pop("modalities", None) if "modalities" in kwargs else modalities
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
+        # 确保当有图像输入时，modalities参数与图像数量一致
+        if images is not None and modalities is None:
+            modalities = ["image"] * images.shape[0]  # 为每个图像样本设置一个"image"模态
+            
         if images is not None:
             (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(inputs, position_ids, attention_mask, None, None, images, modalities, image_sizes=image_sizes)
         else:
@@ -144,6 +149,9 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
         image_sizes = kwargs.pop("image_sizes", None)
+        modalities = kwargs.pop("modalities", None)
+        if modalities is None and images is not None:
+            modalities = ["image"] * images.shape[0]  # 为每个图像样本设置一个"image"模态
         inputs = super().prepare_inputs_for_generation(input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs)
         if images is not None:
             inputs["images"] = images

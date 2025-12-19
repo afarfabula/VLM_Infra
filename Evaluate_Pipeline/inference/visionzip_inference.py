@@ -53,7 +53,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "VisionZip"))
 
 # 直接导入VisionZip，与visionzip_cli.py保持一致
 from visionzip import visionzip
-print("VisionZip模块导入成功")
 
 
 class VisionZipInference:

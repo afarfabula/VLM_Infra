@@ -384,15 +384,17 @@ def safe_load_tokenizer(tokenizer_id):
         return None
 
 conv_llava_llama_3 = Conversation(
-    system="You are a helpful language and vision assistant. " "You are able to understand the visual content that the user provides, " "and assist the user with a variety of tasks using natural language.",
+    system="You are a helpful language and vision assistant. "
+           "You are able to understand the visual content that the user provides, "
+           "and assist the user with a variety of tasks using natural language.",
     roles=("user", "assistant"),
     version="llama_v3",
     messages=[],
     offset=0,
-    sep="<|eot_id|>",
-    sep_style=SeparatorStyle.LLAMA_3,
-    tokenizer_id="meta-llama/Meta-Llama-3-8B-Instruct",
-    tokenizer=safe_load_tokenizer("meta-llama/Meta-Llama-3-8B-Instruct"),
+    sep_style=SeparatorStyle.LLAMA_3,      # ★ 换成官方已支持的 LLAMA_3
+    sep="<|start_header_id|>",             # ★ 下面三行按 Llama-3 填
+    sep2="<|end_header_id|>",
+    stop_str="<|eot_id|>",
     stop_token_ids=[128009],
 )
 

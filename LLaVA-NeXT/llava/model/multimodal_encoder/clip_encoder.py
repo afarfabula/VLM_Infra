@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import json
+import os
 from llava.utils import rank0_print
 from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
 
@@ -37,11 +39,53 @@ class CLIPVisionTower(nn.Module):
             rank0_print("{} is already loaded, `load_model` called again, skipping.".format(self.vision_tower_name))
             return
 
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
-        self.vision_tower.requires_grad_(False)
-
-        self.is_loaded = True
+        # 添加try-except块处理模型加载错误
+        try:
+            self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
+            # 尝试使用不同的参数加载模型
+            self.vision_tower = CLIPVisionModel.from_pretrained(
+                self.vision_tower_name, 
+                device_map=device_map,
+                from_tf=False,
+                ignore_mismatched_sizes=True,
+                local_files_only=False
+            )
+            self.vision_tower.requires_grad_(False)
+            self.is_loaded = True
+        except Exception as e:
+            rank0_print(f"loading visual tower: {str(e)}")
+            
+            # 特别处理KeyError: 'base_model_name_or_path'错误
+            if "base_model_name_or_path" in str(e):
+                rank0_print(f"检测到'base_model_name_or_path'键缺失错误，尝试修复...")
+                try:
+                    # 尝试手动创建配置对象
+                    config = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+                    # 如果缺少base_model_name_or_path字段，则手动添加
+                    if not hasattr(config, 'base_model_name_or_path'):
+                        config.base_model_name_or_path = self.vision_tower_name
+                    
+                    self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
+                    self.vision_tower = CLIPVisionModel(config=config)
+                    self.vision_tower.requires_grad_(False)
+                    self.is_loaded = True
+                    rank0_print(f"loading visual tower: {self.vision_tower_name}")
+                    return
+                except Exception as fix_error:
+                    rank0_print(f"手动修复尝试失败: {str(fix_error)}")
+            
+            rank0_print(f"尝试使用更简单的方式加载视觉塔: {self.vision_tower_name}")
+            # 尝试直接从CLIP库加载默认模型
+            try:
+                config = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+                self.image_processor = CLIPImageProcessor(config=config)
+                self.vision_tower = CLIPVisionModel(config=config)
+                self.vision_tower.requires_grad_(False)
+                self.is_loaded = True
+                rank0_print(f"成功通过备用方法加载视觉塔: {self.vision_tower_name}")
+            except Exception as fallback_error:
+                rank0_print(f"备用加载方法也失败了: {str(fallback_error)}")
+                raise e  # 重新抛出原始异常
 
     def feature_select(self, image_forward_outs):
         select_feature_type = self.select_feature

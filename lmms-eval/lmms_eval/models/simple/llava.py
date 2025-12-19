@@ -35,11 +35,16 @@ try:
 except Exception as e:
     eval_logger.debug("LLaVA is not installed. Please install LLaVA to use this model.\nError: %s" % e)
 
-# inference implementation for attention, can be "sdpa", "eager", "flash_attention_2". Seems FA2 is not effective during inference: https://discuss.huggingface.co/t/flash-attention-has-no-effect-on-inference/73453/5
-# if is_flash_attn_2_available:
-#     best_fit_attn_implementation = "flash_attention_2" # flash_attn has a bug that says: ERROR Error query and key must have the same dtype in generating
+# inference implementation for attention, can be "sdpa", "eager", "flash_attention_2"
+try:
+    from flash_attn import flash_attn_func
+    is_flash_attn_2_available = True
+except ImportError:
+    is_flash_attn_2_available = False
 
-if version.parse(torch.__version__) >= version.parse("2.1.2"):
+if is_flash_attn_2_available:
+    best_fit_attn_implementation = "flash_attention_2"
+elif version.parse(torch.__version__) >= version.parse("2.1.2"):
     best_fit_attn_implementation = "sdpa"
 else:
     best_fit_attn_implementation = "eager"

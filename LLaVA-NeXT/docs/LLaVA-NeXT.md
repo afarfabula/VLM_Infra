@@ -70,11 +70,11 @@ Please note that different torch versions might causing the results to vary.
 
 ```shell
 # Evaluating Llama-3-LLaVA-NeXT-8B on multiple datasets
-accelerate launch --num_processes=8 \
+accelerate launch --num_processes=4 \
   -m lmms_eval \
   --model llava \
   --model_args pretrained=lmms-lab/llama3-llava-next-8b,conv_template=llava_llama_3 \
-  --tasks ai2d,chartqa,docvqa_val,mme,mmbench_en_dev \
+  --tasks mme\
   --batch_size 1 \
   --log_samples \
   --log_samples_suffix llava_next \
