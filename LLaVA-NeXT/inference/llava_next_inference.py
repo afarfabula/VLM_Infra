@@ -45,7 +45,8 @@ class LlavaNextInference:
         temperature: float = 0.0,
         top_p: Optional[float] = None,
         min_new_tokens: int = 5,
-        do_sample: Optional[bool] = None,
+
+       do_sample: Optional[bool] = None,
     ) -> str:
         question = prompt
         visuals = [image] if image is not None else []
